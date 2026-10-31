@@ -49,12 +49,20 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                     missing = await client.call_tool("get_screen", {"session_id": "missing"})
                     self.assertTrue(missing.isError)
                     session = (await asyncio.to_thread(http, "/sessions", json.dumps({"device_id": "test-ipad"}).encode()))["session_id"]
-                    waiting = asyncio.create_task(client.call_tool("wait_for_capture", {"device_id": "test-ipad", "timeout_seconds": 2}))
-                    await asyncio.sleep(0.2)
                     output = BytesIO()
                     Image.new("RGB", (24, 16), "blue").save(output, "JPEG")
-                    await asyncio.to_thread(http, f"/sessions/{session}/frames", output.getvalue(), "image/jpeg")
-                    self.assertFalse((await waiting).isError)
+                    waiting = asyncio.create_task(client.call_tool("wait_for_capture", {"device_id": "test-ipad", "timeout_seconds": 5}))
+                    # A broadcast keeps publishing. One early frame could precede the
+                    # tool's actual start when the CI runner is busy.
+                    for _ in range(60):
+                        await asyncio.to_thread(http, f"/sessions/{session}/frames", output.getvalue(), "image/jpeg")
+                        if waiting.done():
+                            break
+                        await asyncio.sleep(0.1)
+                    capture = await asyncio.wait_for(waiting, timeout=5)
+                    self.assertFalse(capture.isError)
+                    payload = capture.structuredContent or json.loads(next(c.text for c in capture.content if c.type == "text"))
+                    self.assertEqual(payload, {"active": True, "session_id": session})
                     screen = await client.call_tool("get_screen", {"session_id": session})
                     self.assertFalse(screen.isError)
                     self.assertEqual(screen.content[0].type, "image")

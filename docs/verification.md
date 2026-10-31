@@ -5,15 +5,19 @@ Tested on 31 October 2026. Passing a build does not establish that pairing, scre
 | Check | Evidence | Result |
 | --- | --- | --- |
 | Board identification | CP2102 at `/dev/cu.usbserial-0001`; esptool chip and flash queries | ESP32-D0WDQ6 revision 1, 4 MB flash |
-| Firmware compilation | PlatformIO `esp32dev` on Windows Maxis, source `42a7ed4` | Passed; 1,095,309 bytes flash and 57,036 bytes RAM |
+| Firmware compilation | PlatformIO `esp32dev` on Windows Maxis, source `2d02358` (GATT registration fix) | Passed; 1,096,017 bytes flash and 57,036 bytes RAM |
 | Companion simulator build and launch | Existing iPad Air 13 M3 and iPhone 16 Pro Max simulators on Mac | Passed |
 | Companion physical build, install, launch | Connected iPad Air 13 M3, UOA development signing | Passed |
 | Invalid companion connection | Connect with missing URL/token | Clear validation message; capture remained off |
 | Frame receiver unit tests | Authentication, browser-origin rejection, image size/format, orientation, freshness, restart, stop | Passed on Windows Maxis |
-| MCP stdio round trip | Real SDK client against a child server: initialization, six tool schemas, frame image response, new-frame wait and stop | Passed on Windows Maxis; six tests total |
+| MCP stdio round trip | Real SDK client against a child server: initialization, six tool schemas, frame image response, new-frame wait and stop | Passed on Windows Maxis; eight tests total, including truncated pixel data and oversized JPEG headers |
 | Firmware flash | Physical DevKitC V4; 115200 baud, flash hashes verified by esptool | Passed without erasing NVS |
+| BLE advertisement | Read-only scan on Mac | HID and EWP service UUIDs advertised; physical signal observed |
+| Provisioning GATT | Native CoreBluetooth probe on Mac; selective custom-service discovery matching the companion | Passed: EWP service, writable configuration characteristic and readable status; board reported ready |
 | BLE Wi-Fi provisioning, HID keyboard/pointer, physical ReplayKit upload | Requires the initial pairing, Wi-Fi entry and broadcast confirmation | Not yet verified |
 | Multi-host switching or automatic capture bootstrap | No supported implementation in this version | Not implemented |
+
+A generic Mac Bleak probe stalled while traversing GATT descriptors. The bounded native CoreBluetooth probe reads only the custom EWP service and succeeded; this does not establish keyboard pairing or HID delivery.
 
 Only public-safe simulator screenshots are included. No personal device screen, pairing code, token, or original flash backup is published.
 
@@ -36,3 +40,11 @@ The companion connection/share screen is new and has no prior equivalent. The iP
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 
 The installed iOS 27.1 SDK marks the ScreenCaptureKit sharing picker as available on iOS 27 and later. ReplayKit remains the prototype's capture implementation for its iOS 17 deployment target.
+
+## Switching one ESP32 between phones
+
+This is feasible to investigate, rather than an established limitation of the chip. The pinned [NimBLE 2.3.6 device API](https://github.com/h2zero/NimBLE-Arduino/blob/2.3.6/src/NimBLEDevice.h) can enumerate stored bonded peers and manage its allowlist. Its [advertising API](https://github.com/h2zero/NimBLE-Arduino/blob/2.3.6/src/NimBLEAdvertising.h) accepts a directed peer address. These provide the pieces for selecting a bonded target, disconnecting the current connection, and advertising to the selected host while retaining its bond.
+
+That design is an inference from the APIs, not a successful iOS host-switch test. A BLE peripheral advertises; the phone's central decides whether and when to reconnect. Apple's [Core Bluetooth connection guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/BestPracticesForInteractingWithARemotePeripheralDevice/BestPracticesForInteractingWithARemotePeripheralDevice.html) describes central-side reconnection. The system HID stack, locked-device behavior, address privacy and competition from another previously paired host need physical tests with two targets.
+
+Current EWP firmware sends notifications only to one authenticated, subscribed connection and rejects a second HID subscriber. It exposes no host-switch MCP tool. Before adding one, acceptance must show that A→B→A preserves both bonds, input reaches only the selected phone, and a sleeping or unavailable target produces a clear failure instead of routing input to another host.
