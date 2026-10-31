@@ -19,7 +19,7 @@ async def check(name):
     device, advertisement = matches[0]
     if not {SERVICE, HID}.issubset(advertisement.service_uuids):
         raise RuntimeError("HID or provisioning UUID missing from advertisement")
-    async with BleakClient(device) as client:
+    async with BleakClient(device, services=[SERVICE], timeout=12) as client:
         config = client.services.get_characteristic(CONFIG)
         if not config or "write" not in config.properties:
             raise RuntimeError("Provisioning GATT write characteristic is missing")
@@ -33,4 +33,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", required=True)
     args = parser.parse_args()
-    asyncio.run(check(args.name))
+    async def bounded_check():
+        async with asyncio.timeout(25):
+            await check(args.name)
+    asyncio.run(bounded_check())
