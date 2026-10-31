@@ -148,9 +148,13 @@ def pin_cutters(centers, hole, floor=FLOOR):
     return combine_cutters("All pin passage cutters", cutters)
 
 
-base = round_loft("EWP Base - PRINT", [(0, L-3.2, W-3.2, R-1.6),
-                                           (0.45, L-1.0, W-1.0, R-0.5),
-                                           (1.5, L, W, R), (SEAM, L, W, R)])
+base_levels = []
+for index in range(10):
+    angle = math.pi/2 * index/9
+    inset = 1.5*(1-math.sin(angle))
+    base_levels.append((1.5*(1-math.cos(angle)), L-2*inset, W-2*inset, R-inset))
+base_levels.append((SEAM, L, W, R))
+base = round_loft("EWP Base - PRINT", base_levels)
 inside_l, inside_w, inside_r = L-2*WALL, W-2*WALL, R-WALL
 boolean(base, round_loft("Open interior", [(FLOOR, inside_l, inside_w, inside_r),
                                           (SEAM+2, inside_l, inside_w, inside_r)]))
@@ -161,10 +165,12 @@ for x in [PCB_X-12, PCB_X+12]:
                           (x, y, (FLOOR+SEAT_Z)/2-0.125), 0.25), "UNION")
 boolean(base, pin_cutters([(x, y) for y in ROW_Y for x in PIN_X], args.pin_hole))
 
-lid = round_loft("EWP Lid - PRINT", [(SEAM, L-0.1, W-0.1, R-0.05),
-                                         (H-2.2, L-0.1, W-0.1, R-0.05),
-                                         (H-0.7, L-1.8, W-1.8, R-0.9),
-                                         (H, L-4.2, W-4.2, R-2.1)])
+lid_levels = [(SEAM, L-0.1, W-0.1, R-0.05)]
+for index in range(13):
+    angle = math.pi/2 * index/12
+    inset = 3.2*(1-math.cos(angle))
+    lid_levels.append((H-3.2+3.2*math.sin(angle), L-0.1-2*inset, W-0.1-2*inset, R-0.05-inset))
+lid = round_loft("EWP Lid - PRINT", lid_levels)
 boolean(lid, round_loft("Lid underside", [(SEAM-1, inside_l-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_w-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_r-LIP_CLEARANCE-LIP_WALL+0.05),
                                          (H-2.6, inside_l-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_w-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_r-LIP_CLEARANCE-LIP_WALL+0.05)]))
 lip_l, lip_w, lip_r = inside_l-2*LIP_CLEARANCE, inside_w-2*LIP_CLEARANCE, inside_r-LIP_CLEARANCE
@@ -258,6 +264,11 @@ reports = []
 for obj, filename in [(base, "ewp-devkitc-v4-base.stl"), (lid, "ewp-devkitc-v4-lid.stl"),
                        (coupon, "ewp-devkitc-v4-pin-fit-test.stl")] + [
                            (part, f"ewp-pin-tolerance-{hole:.2f}.stl") for part, hole in zip(mini_coupons, [0.85,0.95,1.05])]:
+    obj.data.materials.clear()
+    obj.data.materials.append(olive)
+    for polygon in obj.data.polygons:
+        polygon.material_index = 0
+        polygon.use_smooth = abs(polygon.normal.z) < 0.9999
     reports.append(validate(obj))
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
@@ -316,7 +327,7 @@ for name, pos, energy, size in [("Softbox", (-60,-80,150), 900, 100),
     bpy.ops.object.light_add(type="AREA", location=pos)
     light = bpy.context.object
     light.name = name
-    light.data.energy = energy
+    light.data.energy = energy * 1000
     light.data.shape = "DISK"
     light.data.size = size
     aim(light, (0,0,5))
@@ -337,5 +348,16 @@ if args.render:
     camera.data.ortho_scale = 90
     aim(camera, (0,0,7))
     scene.render.filepath = str(out/"ewp-enclosure-assembled.png")
+    bpy.ops.render.render(write_still=True)
+    lid.hide_render = True
+    ground.hide_render = True
+    camera.location = (-45,-65,-100)
+    camera.data.ortho_scale = 85
+    aim(camera, (0,0,2))
+    bpy.ops.object.light_add(type="AREA", location=(0,-40,-80))
+    bpy.context.object.data.energy = 500000
+    bpy.context.object.data.size = 80
+    aim(bpy.context.object, (0,0,0))
+    scene.render.filepath = str(out/"ewp-enclosure-underside.png")
     bpy.ops.render.render(write_still=True)
 print("EWP enclosure exported; topology validated. Physical fit awaits board measurements and a test print.")
