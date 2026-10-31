@@ -48,7 +48,9 @@ class State:
             with Image.open(io.BytesIO(data)) as image:
                 if image.format != "JPEG" or max(image.size) > 2048:
                     raise ValueError("Expected JPEG, at most 2048 pixels per side")
-                image.verify()
+                # JPEG verify() checks the container but can accept truncated pixel data.
+                # Decode before advancing freshness or reporting a live screen.
+                image.load()
                 width, height = image.size
         except Image.DecompressionBombError as error:
             raise ValueError("Image dimensions exceed the frame limit") from error
