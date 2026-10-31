@@ -1,28 +1,44 @@
 import Foundation
+import Security
 
 struct Configuration: Codable {
     let bridge: URL
     let token: String
     let deviceID: String
 
-    static let group = "group.com.unlikeotherai.ewp"
-    static var file: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)?
-            .appendingPathComponent("connection.json")
+    private static var query: [String: Any] {
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                   kSecAttrService as String: "ewp.connection",
+                                   kSecAttrAccount as String: "local-bridge"]
+        if let group = Bundle.main.object(forInfoDictionaryKey: "EWPKeychainGroup") as? String {
+            query[kSecAttrAccessGroup as String] = group
+        }
+        return query
     }
 
     static func load() throws -> Configuration {
-        guard let file else { throw EWPError.message("App Group is unavailable. Check signing.") }
-        return try JSONDecoder().decode(Self.self, from: Data(contentsOf: file))
+        var query = Self.query
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        let result = SecItemCopyMatching(query as CFDictionary, &value)
+        guard result == errSecSuccess, let data = value as? Data else {
+            throw EWPError.message("Connect the local bridge in EWP first. Keychain status: \(result)")
+        }
+        return try JSONDecoder().decode(Self.self, from: data)
     }
 
     func save() throws {
-        guard let file = Self.file else { throw EWPError.message("App Group is unavailable. Check signing.") }
-        try JSONEncoder().encode(self).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        var resource = URLResourceValues()
-        resource.isExcludedFromBackup = true
-        var url = file
-        try url.setResourceValues(resource)
+        let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(self),
+                                        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let result = SecItemUpdate(Self.query as CFDictionary, attributes as CFDictionary)
+        if result == errSecItemNotFound {
+            let item = Self.query.merging(attributes) { _, value in value }
+            let added = SecItemAdd(item as CFDictionary, nil)
+            guard added == errSecSuccess else { throw EWPError.message("Cannot save bridge connection: \(added)") }
+        } else if result != errSecSuccess {
+            throw EWPError.message("Cannot update bridge connection: \(result)")
+        }
     }
 
     func request(_ path: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") -> URLRequest {

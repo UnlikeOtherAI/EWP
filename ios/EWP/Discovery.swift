@@ -9,7 +9,7 @@ struct Service: Identifiable, Equatable {
 }
 
 @MainActor
-final class Discovery: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
     @Published var services: [Service] = []
     @Published var error: String?
     private var browsers: [NetServiceBrowser] = []

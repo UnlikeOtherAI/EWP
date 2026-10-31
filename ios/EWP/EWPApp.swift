@@ -13,7 +13,10 @@ struct BroadcastPicker: UIViewRepresentable {
         picker.showsMicrophoneButton = false
         return picker
     }
-    func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {}
+    func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {
+        uiView.isUserInteractionEnabled = context.environment.isEnabled
+        uiView.alpha = context.environment.isEnabled ? 1 : 0.35
+    }
 }
 
 struct CompanionView: View {

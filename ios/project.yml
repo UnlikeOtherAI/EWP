@@ -15,10 +15,14 @@ targets:
     type: application
     platform: iOS
     sources: [EWP, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.unlikeotherai.ewp
     info:
       path: EWP/Info.plist
       properties:
         CFBundleDisplayName: EWP
+        EWPKeychainGroup: $(AppIdentifierPrefix)com.unlikeotherai.ewp
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: EWP finds your ESP32 and sends screen frames to your local MCP bridge.
         NSBluetoothAlwaysUsageDescription: EWP configures your ESP32's Wi-Fi connection over Bluetooth.
@@ -26,11 +30,11 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoads: true
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     entitlements:
       path: EWP/EWP.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.unlikeotherai.ewp]
+        keychain-access-groups: ['$(AppIdentifierPrefix)com.unlikeotherai.ewp']
     dependencies:
       - target: Broadcast
         embed: true
@@ -46,6 +50,7 @@ targets:
       path: Broadcast/Info.plist
       properties:
         CFBundleDisplayName: EWP Screen Sharing
+        EWPKeychainGroup: $(AppIdentifierPrefix)com.unlikeotherai.ewp
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoads: true
@@ -56,7 +61,7 @@ targets:
     entitlements:
       path: Broadcast/Broadcast.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.unlikeotherai.ewp]
+        keychain-access-groups: ['$(AppIdentifierPrefix)com.unlikeotherai.ewp']
 schemes:
   EWP:
     build:

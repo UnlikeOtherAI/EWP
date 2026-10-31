@@ -23,7 +23,7 @@ static uint8_t reportMap[] = {
 };
 constexpr char SERVICE[] = "e7a00001-7c3d-4d21-a19a-455750000001";
 constexpr char CONFIG[] = "e7a00002-7c3d-4d21-a19a-455750000001";
-constexpr char STATUS[] = "e7a00003-7c3d-4d21-a19a-455750000001";
+constexpr char STATUS_UUID[] = "e7a00003-7c3d-4d21-a19a-455750000001";
 struct Configuration { char ssid[33]; char password[65]; char token[65]; };
 QueueHandle_t configurationQueue;
 Preferences preferences;
@@ -186,7 +186,7 @@ void setup() {
   auto service = server->createService(SERVICE);
   auto config = service->createCharacteristic(CONFIG, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_AUTHEN, 512);
   config->setCallbacks(&provisionCallbacks);
-  statusCharacteristic = service->createCharacteristic(STATUS, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  statusCharacteristic = service->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   statusCharacteristic->setValue("{\"state\":\"ready\"}");
   server->start();
   auto advertising = NimBLEDevice::getAdvertising();

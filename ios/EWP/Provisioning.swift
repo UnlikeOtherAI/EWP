@@ -2,7 +2,7 @@ import CoreBluetooth
 import Foundation
 
 @MainActor
-final class Provisioning: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
     static let service = CBUUID(string: "e7a00001-7c3d-4d21-a19a-455750000001")
     static let config = CBUUID(string: "e7a00002-7c3d-4d21-a19a-455750000001")
     static let status = CBUUID(string: "e7a00003-7c3d-4d21-a19a-455750000001")
