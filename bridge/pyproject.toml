@@ -1,0 +1,13 @@
+[project]
+name = "ewp-bridge"
+version = "0.1.0"
+description = "Expensive Wall of Phones local screen and HID MCP bridge"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.20,<2", "zeroconf>=0.148,<1", "Pillow>=12,<13"]
+
+[project.scripts]
+ewp = "ewp.server:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"

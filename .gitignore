@@ -1,0 +1,11 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.pio/
+artifacts/
+ios/*.xcodeproj/
+ios/Signing.xcconfig
+.worktrees/
+*.egg-info/
+bridge/.ewp-token
