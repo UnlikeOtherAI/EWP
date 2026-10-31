@@ -165,13 +165,12 @@ lid = round_loft("EWP Lid - PRINT", [(SEAM, L-0.1, W-0.1, R-0.05),
                                          (H-2.2, L-0.1, W-0.1, R-0.05),
                                          (H-0.7, L-1.8, W-1.8, R-0.9),
                                          (H, L-4.2, W-4.2, R-2.1)])
-boolean(lid, round_loft("Lid underside", [(SEAM-1, inside_l, inside_w, inside_r),
-                                         (H-2.6, inside_l, inside_w, inside_r)]))
+boolean(lid, round_loft("Lid underside", [(SEAM-1, inside_l-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_w-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_r-LIP_CLEARANCE-LIP_WALL+0.05),
+                                         (H-2.6, inside_l-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_w-2*LIP_CLEARANCE-2*LIP_WALL+0.1, inside_r-LIP_CLEARANCE-LIP_WALL+0.05)]))
 lip_l, lip_w, lip_r = inside_l-2*LIP_CLEARANCE, inside_w-2*LIP_CLEARANCE, inside_r-LIP_CLEARANCE
 lip = round_loft("Lid registration lip", [(SEAM-LIP_DEPTH, lip_l-0.5, lip_w-0.5, lip_r-0.25),
                                           (SEAM-LIP_DEPTH+0.5, lip_l, lip_w, lip_r),
-                                          (SEAM-0.05, lip_l, lip_w, lip_r),
-                                          (SEAM+0.4, inside_l+0.5, inside_w+0.5, inside_r+0.25)])
+                                          (SEAM+0.4, lip_l, lip_w, lip_r)])
 boolean(lip, round_loft("Lip inside", [(SEAM-LIP_DEPTH-1, lip_l-2*LIP_WALL, lip_w-2*LIP_WALL, lip_r-LIP_WALL),
                                       (SEAM+1, lip_l-2*LIP_WALL, lip_w-2*LIP_WALL, lip_r-LIP_WALL)]))
 boolean(lid, lip, "UNION")
@@ -250,7 +249,7 @@ def validate(obj):
                     pending.append(other)
     bm.free()
     if non_manifold or volume <= 0 or components != 1:
-        raise RuntimeError(f"{obj.name}: non-manifold edges={non_manifold}, volume={volume}")
+        raise RuntimeError(f"{obj.name}: non-manifold edges={non_manifold}, connected components={components}, volume={volume}")
     return {"name": obj.name, "non_manifold_edges": non_manifold,
             "connected_components": components, "volume_mm3": round(volume, 3), "dimensions_mm": [round(v, 3) for v in obj.dimensions]}
 
