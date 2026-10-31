@@ -30,7 +30,7 @@ struct CompanionView: View {
     @State private var active = false
     @State private var message = "Start the local MCP bridge on your computer."
     @State private var working = false
-    @AppStorage("installationID") private var installationID = UUID().uuidString
+    @AppStorage("installationID") private var installationID = ""
 
     var body: some View {
         NavigationStack {
@@ -94,7 +94,9 @@ struct CompanionView: View {
                 if let config = try? Configuration.load() {
                     bridgeAddress = config.bridge.absoluteString
                     token = config.token
+                    installationID = config.deviceID
                 }
+                if installationID.isEmpty { installationID = UUID().uuidString }
                 discovery.start()
                 while !Task.isCancelled {
                     if connected { await refreshStatus() }
@@ -113,7 +115,7 @@ struct CompanionView: View {
 
     private func connection() throws -> Configuration {
         guard let url = URL(string: bridgeAddress), url.scheme == "http", let host = url.host,
-              !host.isEmpty, url.user == nil, url.password == nil,
+              Configuration.isLocalHost(host), url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil, url.path.isEmpty || url.path == "/",
               token.count == 64, token.allSatisfy({ "0123456789abcdef".contains($0) }) else {
             throw EWPError.message("Choose a local bridge and enter its 64-character pairing token.")
@@ -126,7 +128,7 @@ struct CompanionView: View {
         defer { working = false }
         do {
             let config = try connection()
-            let (_, response) = try await URLSession.shared.data(for: config.request("status"))
+            let (_, response) = try await BridgeHTTP.shared.session.data(for: config.request("status"))
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 throw EWPError.message("Bridge rejected the connection. Check the pairing token.")
             }
@@ -140,7 +142,7 @@ struct CompanionView: View {
     @MainActor private func refreshStatus() async {
         do {
             let config = try connection()
-            let (data, response) = try await URLSession.shared.data(for: config.request("status"))
+            let (data, response) = try await BridgeHTTP.shared.session.data(for: config.request("status"))
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let status = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let sessions = status["sessions"] as? [[String: Any]] else {

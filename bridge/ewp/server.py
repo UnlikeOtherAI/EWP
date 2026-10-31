@@ -21,6 +21,17 @@ from .state import MAX_FRAME, State
 LOG = logging.getLogger("ewp")
 
 
+def local_address():
+    """Resolve the default IPv4 interface without sending traffic to the route peer."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect(("192.0.2.1", 9))
+        address = probe.getsockname()[0]
+    candidate = ipaddress.IPv4Address(address)
+    if not candidate.is_private or candidate.is_loopback or candidate.is_unspecified:
+        raise ValueError("No private LAN interface found; specify --advertise-ip")
+    return address
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         raise ValueError("Device redirects are not allowed")
@@ -90,7 +101,8 @@ def handler_type(state, token, devices):
         def handle_request(self):
             if self.headers.get("Origin"):
                 return self.reply(403, {"error": "Browser origins are not supported"})
-            if not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {token}"):
+            if not hmac.compare_digest(self.headers.get("Authorization", "").encode("utf-8"),
+                                       f"Bearer {token}".encode("ascii")):
                 return self.reply(401, {"error": "Bridge token required"})
             try:
                 parts = self.path.strip("/").split("/")
@@ -207,11 +219,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--advertise-ip", required=True, help="This computer's LAN IPv4 address")
+    parser.add_argument("--advertise-ip", help="LAN IPv4 address; defaults to the active interface")
     parser.add_argument("--token-file", default=str(Path.home() / ".config/ewp/token"))
     parser.add_argument("--http-only", action="store_true", help="Run receiver without stdio MCP")
     args = parser.parse_args()
-    address = ipaddress.IPv4Address(args.advertise_ip)
+    try:
+        address = ipaddress.IPv4Address(args.advertise_ip or local_address())
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     if not address.is_private or address.is_loopback or address.is_unspecified:
         parser.error("Use a private LAN address")
     logging.basicConfig(level=logging.INFO)

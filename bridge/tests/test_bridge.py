@@ -56,6 +56,15 @@ class StateTests(unittest.TestCase):
             state.create(str(i))
         self.assertEqual(len(state.listing()), 32)
 
+    def test_rejects_forged_oversized_jpeg_header(self):
+        state = State()
+        key = state.create("ipad")
+        data = bytearray(jpeg())
+        start = data.index(b"\xff\xc0")
+        data[start + 5:start + 9] = (50000).to_bytes(2, "big") * 2
+        with self.assertRaises(ValueError):
+            state.put(key, bytes(data), 1)
+
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
@@ -81,6 +90,7 @@ class HTTPTests(unittest.TestCase):
     def test_authentication_browser_origin_and_frame_lifecycle(self):
         auth = {"Authorization": "Bearer test-token"}
         self.assertEqual(self.request("GET", "/status")[0], 401)
+        self.assertEqual(self.request("GET", "/status", headers={"Authorization": "Bearer \xe9"})[0], 401)
         self.assertEqual(self.request("GET", "/status", headers={**auth, "Origin": "https://example.com"})[0], 403)
         status, data = self.request("POST", "/sessions", json.dumps({"device_id": "ipad"}), auth)
         self.assertEqual(status, 201)

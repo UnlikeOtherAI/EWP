@@ -170,8 +170,8 @@ void setup() {
   provisionUntil = millis() + 300000;
   configurationQueue = xQueueCreate(1, sizeof(Configuration));
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true);
-  token = preferences.getString("token", "");
-  String ssid = preferences.getString("ssid", "");
+  token = preferences.isKey("token") ? preferences.getString("token") : "";
+  String ssid = preferences.isKey("ssid") ? preferences.getString("ssid") : "";
   if (!ssid.isEmpty()) WiFi.begin(ssid.c_str(), preferences.getString("password", "").c_str());
   NimBLEDevice::init(deviceId.c_str());
   NimBLEDevice::setSecurityAuth(true, true, true);
@@ -188,6 +188,9 @@ void setup() {
   config->setCallbacks(&provisionCallbacks);
   statusCharacteristic = service->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   statusCharacteristic->setValue("{\"state\":\"ready\"}");
+  // NimBLE 2.3.x registers each service explicitly before starting GATT.
+  hid->startServices();
+  service->start();
   server->start();
   auto advertising = NimBLEDevice::getAdvertising();
   advertising->setAppearance(0x03C1); advertising->setName(deviceId.c_str());
