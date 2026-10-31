@@ -65,6 +65,17 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             state.put(key, bytes(data), 1)
 
+    def test_truncated_pixel_data_does_not_make_capture_live(self):
+        state = State()
+        key = state.create("ipad")
+        truncated = jpeg()[:-12]
+        # The JPEG header is readable, but its pixel scan is incomplete.
+        with Image.open(io.BytesIO(truncated)) as image:
+            self.assertEqual(image.size, (24, 16))
+        with self.assertRaises(OSError):
+            state.put(key, truncated, 1)
+        self.assertFalse(state.listing()[0]["live"])
+
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
