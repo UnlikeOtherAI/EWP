@@ -61,6 +61,8 @@ blender --background --python-exit-code 1 \
 
 Use `--light-x` and `--light-y` to move the top aperture. The board length runs along X, USB toward negative X, antenna toward positive X. The PCB centre is X = -4.5 mm, Y = 0; the bottom of the case is Z = 0.
 
+Run `python hardware/enclosure/verify_stl.py` to check the delivered STLs independently of Blender. It checks closed edges, consistent winding, connected solids, bed placement, and actual through-passage counts from a horizontal section.
+
 The generator checks every exported part for manifold edges, positive volume, and one connected component. These checks establish mesh integrity; they do not establish physical fit, strength, printability, or radio/thermal performance.
 
 ## Views

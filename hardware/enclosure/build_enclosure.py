@@ -352,7 +352,7 @@ if args.render:
     lid.hide_render = True
     ground.hide_render = True
     camera.location = (-45,-65,-100)
-    camera.data.ortho_scale = 85
+    camera.data.ortho_scale = 98
     aim(camera, (0,0,2))
     bpy.ops.object.light_add(type="AREA", location=(0,-40,-80))
     bpy.context.object.data.energy = 50000

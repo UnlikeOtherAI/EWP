@@ -1,0 +1,86 @@
+{
+  "units": "mm",
+  "pin_count": 38,
+  "pin_pitch": 2.54,
+  "row_spacing": 25.4,
+  "pin_hole_square_side": 0.95,
+  "case_dimensions": [
+    66.8,
+    42.8,
+    17.2
+  ],
+  "led_hole_diameter": 1.6,
+  "led_position_provisional": [
+    -22.7,
+    -5.4
+  ],
+  "physical_fit_verified": false,
+  "parts": [
+    {
+      "name": "EWP Base - PRINT",
+      "non_manifold_edges": 0,
+      "connected_components": 1,
+      "volume_mm3": 9884.643,
+      "dimensions_mm": [
+        66.8,
+        42.8,
+        11.8
+      ]
+    },
+    {
+      "name": "EWP Lid - PRINT",
+      "non_manifold_edges": 0,
+      "connected_components": 1,
+      "volume_mm3": 9527.14,
+      "dimensions_mm": [
+        66.7,
+        42.7,
+        8.2
+      ]
+    },
+    {
+      "name": "38 pin fit coupon - PRINT",
+      "non_manifold_edges": 0,
+      "connected_components": 1,
+      "volume_mm3": 3266.888,
+      "dimensions_mm": [
+        51.5,
+        29.8,
+        2.2
+      ]
+    },
+    {
+      "name": "Tolerance coupon 0.85 - PRINT",
+      "non_manifold_edges": 0,
+      "connected_components": 1,
+      "volume_mm3": 764.77,
+      "dimensions_mm": [
+        12.0,
+        29.8,
+        2.2
+      ]
+    },
+    {
+      "name": "Tolerance coupon 0.95 - PRINT",
+      "non_manifold_edges": 0,
+      "connected_components": 1,
+      "volume_mm3": 761.326,
+      "dimensions_mm": [
+        12.0,
+        29.8,
+        2.2
+      ]
+    },
+    {
+      "name": "Tolerance coupon 1.05 - PRINT",
+      "non_manifold_edges": 0,
+      "connected_components": 1,
+      "volume_mm3": 757.53,
+      "dimensions_mm": [
+        12.0,
+        29.8,
+        2.2
+      ]
+    }
+  ]
+}
