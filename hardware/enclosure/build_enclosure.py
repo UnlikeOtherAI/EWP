@@ -268,7 +268,7 @@ for obj, filename in [(base, "ewp-devkitc-v4-base.stl"), (lid, "ewp-devkitc-v4-l
     obj.data.materials.append(olive)
     for polygon in obj.data.polygons:
         polygon.material_index = 0
-        polygon.use_smooth = abs(polygon.normal.z) < 0.9999
+        polygon.use_smooth = max(abs(v) for v in polygon.normal) < 0.9999
     reports.append(validate(obj))
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
@@ -327,7 +327,7 @@ for name, pos, energy, size in [("Softbox", (-60,-80,150), 900, 100),
     bpy.ops.object.light_add(type="AREA", location=pos)
     light = bpy.context.object
     light.name = name
-    light.data.energy = energy * 1000
+    light.data.energy = energy * 100
     light.data.shape = "DISK"
     light.data.size = size
     aim(light, (0,0,5))
@@ -355,7 +355,7 @@ if args.render:
     camera.data.ortho_scale = 85
     aim(camera, (0,0,2))
     bpy.ops.object.light_add(type="AREA", location=(0,-40,-80))
-    bpy.context.object.data.energy = 500000
+    bpy.context.object.data.energy = 50000
     bpy.context.object.data.size = 80
     aim(bpy.context.object, (0,0,0))
     scene.render.filepath = str(out/"ewp-enclosure-underside.png")
