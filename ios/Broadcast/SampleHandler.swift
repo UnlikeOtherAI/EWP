@@ -13,6 +13,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var busy = false
     private var running = false
     private var lastFrame: CFTimeInterval = 0
+    private var nextSessionAttempt: CFTimeInterval = 0
     private var generation = 0
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
@@ -27,6 +28,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
         guard let configuration else { return }
         lock.lock()
         guard running, !busy else { lock.unlock(); return }
+        let now = CACurrentMediaTime()
+        guard now >= nextSessionAttempt else { lock.unlock(); return }
+        // A refused connection can fail immediately. Incoming video callbacks
+        // must not turn an offline bridge into a retry at the display frame rate.
+        nextSessionAttempt = now + 2
         busy = true
         let expectedGeneration = generation
         lock.unlock()
