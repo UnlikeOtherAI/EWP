@@ -155,8 +155,8 @@ inside_l, inside_w, inside_r = L-2*WALL, W-2*WALL, R-WALL
 boolean(base, round_loft("Open interior", [(FLOOR, inside_l, inside_w, inside_r),
                                           (SEAM+2, inside_l, inside_w, inside_r)]))
 for x in [PCB_X-12, PCB_X+12]:
-    for y in [-14.05, 14.05]:
-        # Posts support only the PCB edge, outside header plastic and solder pads.
+    for y in [-9.70, 9.70]:
+        # Insulating seats are inside the header rows, clear of the plastic housings.
         boolean(base, box("PCB edge seat", (5.8, 1.55, SEAT_Z-FLOOR+0.25),
                           (x, y, (FLOOR+SEAT_Z)/2-0.125), 0.25), "UNION")
 boolean(base, pin_cutters([(x, y) for y in ROW_Y for x in PIN_X], args.pin_hole))
@@ -174,11 +174,11 @@ lip = round_loft("Lid registration lip", [(SEAM-LIP_DEPTH, lip_l-0.5, lip_w-0.5,
 boolean(lip, round_loft("Lip inside", [(SEAM-LIP_DEPTH-1, lip_l-2*LIP_WALL, lip_w-2*LIP_WALL, lip_r-LIP_WALL),
                                       (SEAM+1, lip_l-2*LIP_WALL, lip_w-2*LIP_WALL, lip_r-LIP_WALL)]))
 boolean(lid, lip, "UNION")
-for x in [PCB_X-12, PCB_X+12]:
-    for y in [-13.8, 13.8]:
-        # Lid pillars lightly capture the PCB edges without loading RF shield or buttons.
-        boolean(lid, box("PCB upper restraint", (4.8, 1.3, H-2.3-(SEAT_Z+PCB_T+0.25)),
-                         (x, y, (H-2.3+SEAT_Z+PCB_T+0.25)/2), 0.22), "UNION")
+for x in [-15, 15]:
+    for side in [-1, 1]:
+        # Four rounded ribs create 0.075 mm nominal interference against the base.
+        boolean(lid, box("Lid friction rib", (4.5, 0.65, 1.7),
+                         (x, side*(lip_w/2-0.05), SEAM-1.6), 0.20), "UNION")
 
 for part in [base, lid]:
     # A moulded cable can enter the recess; not just the bare metal connector.
