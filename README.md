@@ -53,6 +53,8 @@ Choose the actual serial port for your machine. If the USB link is unreliable, u
 
 The serial console prints the board's name and its six-digit Bluetooth pairing code. This board has no display. Keep that code available for the initial iOS pairing dialog. Wi-Fi provisioning is open for five minutes after reset; resetting the board reopens setup without deleting the stored Wi-Fi connection or bonds.
 
+For a read-only hardware check before pairing, run `uv run --with bleak firmware/check_ble.py --name ewp-your-board-name`. This checks the advertised services and reads the provisioning status; it does not enter Wi-Fi credentials or send input.
+
 ## Install and connect the companion app
 
 ```sh

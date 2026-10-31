@@ -54,7 +54,9 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                     output = BytesIO()
                     Image.new("RGB", (24, 16), "blue").save(output, "JPEG")
                     await asyncio.to_thread(http, f"/sessions/{session}/frames", output.getvalue(), "image/jpeg")
-                    self.assertFalse((await waiting).isError)
+                    capture = await waiting
+                    self.assertFalse(capture.isError)
+                    self.assertEqual(capture.structuredContent, {"active": True, "session_id": session})
                     screen = await client.call_tool("get_screen", {"session_id": session})
                     self.assertFalse(screen.isError)
                     self.assertEqual(screen.content[0].type, "image")
