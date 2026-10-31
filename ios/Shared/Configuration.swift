@@ -8,8 +8,9 @@ struct Configuration: Codable {
 
     static func isLocalHost(_ host: String) -> Bool {
         if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".local") { return true }
-        let octets = host.split(separator: ".").compactMap { UInt8($0) }
-        guard octets.count == 4 else { return false }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        let octets = parts.compactMap { UInt8($0) }
+        guard parts.count == 4, octets.count == 4, parts.allSatisfy({ $0 == "0" || !$0.hasPrefix("0") }) else { return false }
         return octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) ||
             (octets[0] == 172 && (16...31).contains(octets[1])) || octets[0] == 127
     }
@@ -33,11 +34,11 @@ struct Configuration: Codable {
         guard result == errSecSuccess, let data = value as? Data else {
             throw EWPError.message("Connect the local bridge in EWP first. Keychain status: \(result)")
         }
-        let value = try JSONDecoder().decode(Self.self, from: data)
-        guard value.bridge.scheme == "http", let host = value.bridge.host, isLocalHost(host) else {
+        let decoded = try JSONDecoder().decode(Self.self, from: data)
+        guard decoded.bridge.scheme == "http", let host = decoded.bridge.host, isLocalHost(host) else {
             throw EWPError.message("The saved bridge must be on the local network.")
         }
-        return value
+        return decoded
     }
 
     func save() throws {
