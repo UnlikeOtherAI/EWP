@@ -35,8 +35,7 @@ WALL, FLOOR, SEAM = 2.20, 2.20, 11.80
 SEAT_Z = 4.80
 LIP_CLEARANCE, LIP_WALL, LIP_DEPTH = 0.20, 1.60, 2.80
 
-bpy.ops.object.select_all(action="SELECT")
-bpy.ops.object.delete(use_global=False)
+bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
 scene.unit_settings.system = "METRIC"
 scene.unit_settings.length_unit = "MILLIMETERS"
@@ -216,7 +215,10 @@ def ref(obj, mat):
     for collection in list(obj.users_collection):
         collection.objects.unlink(obj)
     reference.objects.link(obj)
+    obj.data.materials.clear()
     obj.data.materials.append(mat)
+    for polygon in obj.data.polygons:
+        polygon.material_index = 0
     obj.hide_render = True
     return obj
 
@@ -337,6 +339,27 @@ scene.render.resolution_x = 1600
 scene.render.resolution_y = 1100
 scene.render.resolution_percentage = 100
 scene.view_settings.view_transform = "AgX"
+# Make the editable file open with both parts framed, without studio clutter.
+bpy.ops.object.select_all(action="DESELECT")
+for obj in [base, lid]:
+    obj.select_set(True)
+bpy.context.view_layer.objects.active = base
+for obj in scene.objects:
+    if obj.type in {"LIGHT", "CAMERA"} or obj == ground:
+        obj.hide_set(True)
+for screen in bpy.data.screens:
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            space = area.spaces.active
+            space.clip_start, space.clip_end = 0.1, 2000
+            space.shading.type = "SOLID"
+            space.shading.color_type = "MATERIAL"
+            space.shading.show_cavity = True
+            space.overlay.show_floor = False
+            space.region_3d.view_location = (0, 0, 7)
+            space.region_3d.view_rotation = camera.rotation_euler.to_quaternion()
+            space.region_3d.view_distance = 155
+            space.region_3d.view_perspective = "ORTHO"
 bpy.ops.wm.save_as_mainfile(filepath=str(out/"ewp-devkitc-v4.blend"))
 if args.render:
     scene.render.filepath = str(out/"ewp-enclosure-open.png")
