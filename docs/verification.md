@@ -10,8 +10,8 @@ Tested on 31 October 2026. Passing a build does not establish that pairing, scre
 | Companion physical build, install, launch | Connected iPad Air 13 M3, UOA development signing | Passed |
 | Invalid companion connection | Connect with missing URL/token | Clear validation message; capture remained off |
 | Frame receiver unit tests | Authentication, browser-origin rejection, image size/format, orientation, freshness, restart, stop | Passed on Windows Maxis |
-| MCP stdio round trip | Initialization, tool schemas, frame image response and stop behavior | Pending final run |
-| Firmware flash and boot | Physical DevKitC V4 | In progress |
+| MCP stdio round trip | Real SDK client against a child server: initialization, six tool schemas, frame image response, new-frame wait and stop | Passed on Windows Maxis; six tests total |
+| Firmware flash | Physical DevKitC V4; 115200 baud, flash hashes verified by esptool | Passed without erasing NVS |
 | BLE Wi-Fi provisioning, HID keyboard/pointer, physical ReplayKit upload | Requires the initial pairing, Wi-Fi entry and broadcast confirmation | Not yet verified |
 | Multi-host switching or automatic capture bootstrap | No supported implementation in this version | Not implemented |
 

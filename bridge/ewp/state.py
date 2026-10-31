@@ -44,11 +44,14 @@ class State:
     def put(self, key: str, data: bytes, orientation: int):
         if not 0 < len(data) <= MAX_FRAME or orientation not in range(1, 9):
             raise ValueError("Invalid frame size or orientation")
-        with Image.open(io.BytesIO(data)) as image:
-            if image.format != "JPEG" or max(image.size) > 2048:
-                raise ValueError("Expected JPEG, at most 2048 pixels per side")
-            image.verify()
-            width, height = image.size
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format != "JPEG" or max(image.size) > 2048:
+                    raise ValueError("Expected JPEG, at most 2048 pixels per side")
+                image.verify()
+                width, height = image.size
+        except Image.DecompressionBombError as error:
+            raise ValueError("Image dimensions exceed the frame limit") from error
         with self.lock:
             session = self.sessions[key]
             session.frame = data

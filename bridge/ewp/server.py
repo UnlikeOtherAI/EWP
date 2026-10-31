@@ -101,7 +101,8 @@ def handler_type(state, token, devices):
         def handle_request(self):
             if self.headers.get("Origin"):
                 return self.reply(403, {"error": "Browser origins are not supported"})
-            if not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {token}"):
+            if not hmac.compare_digest(self.headers.get("Authorization", "").encode("utf-8"),
+                                       f"Bearer {token}".encode("ascii")):
                 return self.reply(401, {"error": "Bridge token required"})
             try:
                 parts = self.path.strip("/").split("/")
