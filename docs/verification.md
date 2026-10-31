@@ -13,8 +13,11 @@ Tested on 31 October 2026. Passing a build does not establish that pairing, scre
 | MCP stdio round trip | Real SDK client against a child server: initialization, six tool schemas, frame image response, new-frame wait and stop | Passed on Windows Maxis; eight tests total, including truncated pixel data and oversized JPEG headers |
 | Firmware flash | Physical DevKitC V4; 115200 baud, flash hashes verified by esptool | Passed without erasing NVS |
 | BLE advertisement | Read-only scan on Mac | HID and EWP service UUIDs advertised; physical signal observed |
+| Provisioning GATT | Native CoreBluetooth probe on Mac; selective custom-service discovery matching the companion | Passed: EWP service, writable configuration characteristic and readable status; board reported ready |
 | BLE Wi-Fi provisioning, HID keyboard/pointer, physical ReplayKit upload | Requires the initial pairing, Wi-Fi entry and broadcast confirmation | Not yet verified |
 | Multi-host switching or automatic capture bootstrap | No supported implementation in this version | Not implemented |
+
+A generic Mac Bleak probe stalled while traversing GATT descriptors. The bounded native CoreBluetooth probe reads only the custom EWP service and succeeded; this does not establish keyboard pairing or HID delivery.
 
 Only public-safe simulator screenshots are included. No personal device screen, pairing code, token, or original flash backup is published.
 
