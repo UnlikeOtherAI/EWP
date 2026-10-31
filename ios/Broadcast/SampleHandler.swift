@@ -7,13 +7,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private let lock = NSLock()
     private let encodingQueue = DispatchQueue(label: "ewp.frames", qos: .utility)
     private let context = CIContext(options: [.cacheIntermediates: false])
-    private let network: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 4
-        config.httpMaximumConnectionsPerHost = 2
-        config.urlCache = nil
-        return URLSession(configuration: config)
-    }()
+    private let network = BridgeHTTP.shared.session
     private var configuration: Configuration?
     private var sessionID: String?
     private var busy = false

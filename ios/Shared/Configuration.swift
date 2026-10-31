@@ -6,6 +6,14 @@ struct Configuration: Codable {
     let token: String
     let deviceID: String
 
+    static func isLocalHost(_ host: String) -> Bool {
+        if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".local") { return true }
+        let octets = host.split(separator: ".").compactMap { UInt8($0) }
+        guard octets.count == 4 else { return false }
+        return octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) ||
+            (octets[0] == 172 && (16...31).contains(octets[1])) || octets[0] == 127
+    }
+
     private static var query: [String: Any] {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                    kSecAttrService as String: "ewp.connection",
@@ -25,7 +33,11 @@ struct Configuration: Codable {
         guard result == errSecSuccess, let data = value as? Data else {
             throw EWPError.message("Connect the local bridge in EWP first. Keychain status: \(result)")
         }
-        return try JSONDecoder().decode(Self.self, from: data)
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.bridge.scheme == "http", let host = value.bridge.host, isLocalHost(host) else {
+            throw EWPError.message("The saved bridge must be on the local network.")
+        }
+        return value
     }
 
     func save() throws {
