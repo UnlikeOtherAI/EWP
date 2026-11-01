@@ -36,12 +36,13 @@ char selectedHost[32] = {};
 volatile uint32_t pairingUntil = 0;
 volatile uint32_t identifyUntil = 0;
 volatile bool advertisingNeeded = false;
-char pairingExcluded[8][32] = {};
-String pendingHostName;
+char pairingExcluded[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
+String pendingHostName, lastError;
 struct HostEvent { char id[32]; };
 QueueHandle_t hostEvents;
-uint32_t passkey;
+uint32_t passkey, setupCode;
 uint32_t provisionUntil;
+volatile bool storeFull = false;
 bool mdnsStarted = false;
 portMUX_TYPE hidMux = portMUX_INITIALIZER_UNLOCKED;
 uint16_t hidHandle = BLE_HS_CONN_HANDLE_NONE;
@@ -73,7 +74,10 @@ void reserveHost(const String &id) {
   portENTER_CRITICAL(&hidMux); strlcpy(selectedHost, id.c_str(), sizeof(selectedHost));
   hidHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
 }
+// millis() wraps after 49.7 days, so every window is a signed difference; an
+// unsigned comparison leaves the window stuck open after the wrap.
 bool pairingOpen() { return static_cast<int32_t>(pairingUntil - millis()) > 0; }
+bool setupOpen() { return static_cast<int32_t>(provisionUntil - millis()) > 0; }
 bool identifyOpen() { return static_cast<int32_t>(identifyUntil - millis()) > 0; }
 String displayName() { return deviceName.isEmpty() ? deviceId : deviceName; }
 // Both the operator and the agent need to tell sibling boards apart, and the
@@ -99,20 +103,27 @@ bool permittedHost(NimBLEConnInfo &info) {
   portEXIT_CRITICAL(&hidMux);
   return !excluded;
 }
+void clearSelection(const char *reason) {
+  reserveHost(""); preferences.remove("selected"); lastError = reason;
+}
 bool restartAdvertising() {
   auto advertising = NimBLEDevice::getAdvertising();
   advertising->stop();
   for (int i=static_cast<int>(NimBLEDevice::getWhiteListCount())-1; i>=0; --i) {
     if (!NimBLEDevice::whiteListRemove(NimBLEDevice::getWhiteListAddress(i))) return false;
   }
-  bool restricted = !pairingOpen();
+  bool restricted = !pairingOpen() && !selectedId().isEmpty();
   if (restricted) {
-    bool found = false;
+    NimBLEAddress selected; bool found = false;
     for (int i=0; i<NimBLEDevice::getNumBonds(); ++i) {
       auto address = NimBLEDevice::getBondedAddress(i);
-      if (hostId(address) == selectedId()) { found = NimBLEDevice::whiteListAdd(address); break; }
+      if (hostId(address) == selectedId()) { selected = address; found = true; break; }
     }
-    if (!found) return false; // No fallback to a different previously paired phone.
+    // No fallback to a different previously paired phone: when the selected
+    // bond is gone the board advertises openly so it can be provisioned and
+    // re-paired, rather than refusing to advertise at all and going dark.
+    if (!found) { clearSelection("selected_host_missing"); restricted = false; }
+    else if (!NimBLEDevice::whiteListAdd(selected)) return false;
   }
   advertising->setScanFilter(false, restricted);
   return advertising->start();
@@ -154,7 +165,9 @@ void appendStatus(JsonDocument &doc) {
   doc["id"] = deviceId; doc["name"] = deviceName; doc["bluetooth_name"] = keyboardName; doc["firmware"] = FIRMWARE;
   doc["selected_host"] = selectedId(); doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
   doc["pairing_open"] = pairingOpen(); doc["saved_hosts"] = NimBLEDevice::getNumBonds();
+  doc["host_capacity"] = CONFIG_BT_NIMBLE_MAX_BONDS; doc["store_full"] = storeFull;
   doc["host_switching"] = true;
+  if (!lastError.isEmpty()) doc["last_error"] = lastError;
   doc["ble_connections"] = NimBLEDevice::getServer()->getConnectedCount();
   doc["last_disconnect_reason"] = lastDisconnectReason;
   doc["connections_seen"] = connectionsSeen;
@@ -163,14 +176,23 @@ void appendStatus(JsonDocument &doc) {
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["address"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
   if (!selectedId().isEmpty() && getHid() == BLE_HS_CONN_HANDLE_NONE) doc["state"] = "waiting_for_selected_host";
+  else if (selectedId().isEmpty() && lastError == "selected_host_missing") doc["state"] = "selected_host_missing";
 }
 bool beginPairing(JsonDocument &out) {
-  if (NimBLEDevice::getNumBonds() >= 8) { out["error"] = "Eight bonds are saved; pairing was not opened and no bond was deleted"; return false; }
-  char excluded[8][32] = {};
-  for (int i=0; i<NimBLEDevice::getNumBonds() && i<8; ++i) strlcpy(excluded[i], hostId(NimBLEDevice::getBondedAddress(i)).c_str(), 32);
+  if (NimBLEDevice::getNumBonds() >= CONFIG_BT_NIMBLE_MAX_BONDS) {
+    out["error"] = String("All ") + CONFIG_BT_NIMBLE_MAX_BONDS + " bonds are saved; pairing was not opened and no bond was deleted. Call forget_host to free a slot.";
+    return false;
+  }
+  char excluded[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
+  for (int i=0; i<NimBLEDevice::getNumBonds() && i<CONFIG_BT_NIMBLE_MAX_BONDS; ++i) strlcpy(excluded[i], hostId(NimBLEDevice::getBondedAddress(i)).c_str(), 32);
   portENTER_CRITICAL(&hidMux); memcpy(pairingExcluded, excluded, sizeof(excluded)); portEXIT_CRITICAL(&hidMux);
   setHid(BLE_HS_CONN_HANDLE_NONE);
   portENTER_CRITICAL(&hidMux); pairingHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
+  // Secure Connections passkey entry leaks a reused passkey across attempts,
+  // so each window gets its own code. loop() restores the setup code when the
+  // window closes, because that is the one printed on the board's label.
+  passkey = 100000 + esp_random() % 900000;
+  NimBLEDevice::setSecurityPasskey(passkey);
   pairingUntil = millis()+180000;
   for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
   advertisingNeeded = true;
@@ -218,10 +240,15 @@ bool beginIdentify(int seconds, JsonDocument &out) {
   out["note"] = "This board has no user LED. It advertises under the Bluetooth name above for the duration, and woke the screen of the host it drives with a modifier-only key.";
   return true;
 }
+// A bonded phone reconnects to a known keyboard within about a second, so
+// disconnecting one that is not the host in use puts it in a reconnect loop
+// that starves the phone being paired. Keep it connected with no HID handle.
+bool parkedPeer(NimBLEConnInfo &info) { return !permittedHost(info) && info.isBonded(); }
 void acceptSubscribedHost(NimBLEConnInfo &info) {
   bool subscribed = false;
   for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle() && entry.reports) subscribed = true;
   if (!subscribed || !info.isEncrypted() || !info.isAuthenticated()) return;
+  if (parkedPeer(info)) return;
   uint16_t current = getHid();
   if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
     NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
@@ -238,12 +265,22 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     ++connectionsSeen; authenticationState = 0;
     if (pairingOpen()) {
-      bool accepted;
-      portENTER_CRITICAL(&hidMux);
-      accepted = pairingHandle == BLE_HS_CONN_HANDLE_NONE || pairingHandle == info.getConnHandle();
-      if (accepted) pairingHandle = info.getConnHandle();
-      portEXIT_CRITICAL(&hidMux);
-      if (!accepted) { server->disconnect(info.getConnHandle()); return; }
+      if (NimBLEDevice::isBonded(info.getIdAddress())) {
+        // Parked, so it never takes the pairing slot. The controller allows
+        // three links at once; the last one stays free for the new phone.
+        bool reserved;
+        portENTER_CRITICAL(&hidMux); reserved = pairingHandle == BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
+        if (reserved && server->getConnectedCount() >= CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
+          server->disconnect(info.getConnHandle()); return;
+        }
+      } else {
+        bool accepted;
+        portENTER_CRITICAL(&hidMux);
+        accepted = pairingHandle == BLE_HS_CONN_HANDLE_NONE || pairingHandle == info.getConnHandle();
+        if (accepted) pairingHandle = info.getConnHandle();
+        portEXIT_CRITICAL(&hidMux);
+        if (!accepted) { server->disconnect(info.getConnHandle()); return; }
+      }
     }
     for (auto &entry : subscriptions) if (entry.handle == BLE_HS_CONN_HANDLE_NONE) {
       entry.handle = info.getConnHandle(); entry.reports = 0; break;
@@ -266,12 +303,31 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   uint32_t onPassKeyDisplay() override { return passkey; }
   void onAuthenticationComplete(NimBLEConnInfo &info) override {
     authenticationState = info.isEncrypted() && info.isAuthenticated() ? 1 : -1;
-    if (!info.isEncrypted() || !info.isAuthenticated() ||
-        (!permittedHost(info) && millis() > provisionUntil))
-      NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+    if (!info.isEncrypted() || !info.isAuthenticated()) {
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
+    }
+    if (parkedPeer(info)) {
+      // Its identity address may only have resolved now, so release the
+      // pairing slot it was given on connect.
+      portENTER_CRITICAL(&hidMux);
+      if (pairingHandle == info.getConnHandle()) pairingHandle = BLE_HS_CONN_HANDLE_NONE;
+      portEXIT_CRITICAL(&hidMux);
+      return;
+    }
+    if (!permittedHost(info) && !setupOpen()) NimBLEDevice::getServer()->disconnect(info.getConnHandle());
     else acceptSubscribedHost(info);
   }
 } serverCallbacks;
+
+class DeviceCallbacks : public NimBLEDeviceCallbacks {
+  // NimBLE's default store handler answers an overflow with
+  // ble_gap_unpair_oldest_except, which deletes a bond nobody asked it to
+  // delete. Refusing the store fails the write instead, which is the promise
+  // the product makes: a saved host disappears only when told to.
+  int onStoreStatus(struct ble_store_status_event *, void *) override {
+    storeFull = true; return BLE_HS_ESTORE_CAP;
+  }
+} deviceCallbacks;
 
 class ReportCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *report, NimBLEConnInfo &info, uint16_t value) override {
@@ -290,7 +346,7 @@ class ProvisionCallbacks : public NimBLECharacteristicCallbacks {
     auto value = characteristic->getValue();
     // Drop sensitive data from the readable characteristic immediately.
     characteristic->setValue("");
-    if (!info.isAuthenticated() || !info.isEncrypted() || millis() > provisionUntil) return;
+    if (!info.isAuthenticated() || !info.isEncrypted() || !setupOpen()) return;
     if (value.size() > 512 || deserializeJson(doc, value.c_str(), value.size())) return;
     String ssid = doc["ssid"] | "", password = doc["password"] | "";
     if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 64) return;
@@ -449,10 +505,13 @@ void setup() {
   for (int i=0; i<6; ++i) snprintf(digits + i*2, 3, "%02x", static_cast<uint8_t>(mac >> (8*i)));
   deviceId = String("ewp-") + digits;
   deviceName = preferences.getString("name", "");
-  passkey = preferences.getUInt("passkey", 0);
-  if (!passkey) { passkey = 100000 + esp_random() % 900000; preferences.putUInt("passkey", passkey); }
-  // Pairing code is physical setup data; never print Wi-Fi credentials or bridge tokens.
-  Serial.printf("\nEWP %s\nBluetooth pairing code: %06u\n", deviceId.c_str(), passkey);
+  setupCode = preferences.getUInt("passkey", 0);
+  if (!setupCode) { setupCode = 100000 + esp_random() % 900000; preferences.putUInt("passkey", setupCode); }
+  passkey = setupCode;
+  // The setup code is physical setup data, and it only covers Wi-Fi setup and a
+  // first pairing; start_pairing issues its own code. Never print Wi-Fi
+  // credentials or bridge tokens.
+  Serial.printf("\nEWP %s\nBluetooth setup code: %06u\n", deviceId.c_str(), setupCode);
   provisionUntil = millis() + 300000;
   configurationQueue = xQueueCreate(1, sizeof(Configuration));
   hostEvents = xQueueCreate(1, sizeof(HostEvent));
@@ -468,8 +527,15 @@ void setup() {
   String ssid = preferences.isKey("ssid") ? preferences.getString("ssid") : "";
   if (!ssid.isEmpty()) WiFi.begin(ssid.c_str(), preferences.getString("password", "").c_str());
   keyboardName = advertisedName();
+  NimBLEDevice::setDeviceCallbacks(&deviceCallbacks);
   NimBLEDevice::init(keyboardName.c_str());
-  if (NimBLEDevice::getNumBonds() < 8 && (NimBLEDevice::getNumBonds() == 0 || selectedId().isEmpty())) pairingUntil = millis() + 300000;
+  // Only a board that has never been paired opens a pairing window by itself.
+  // A power blip must not offer a wall of boards to anyone in the room.
+  if (NimBLEDevice::getNumBonds() == 0) pairingUntil = millis() + 300000;
+  bool selectedBonded = selectedId().isEmpty();
+  for (int i=0; i<NimBLEDevice::getNumBonds(); ++i)
+    if (hostId(NimBLEDevice::getBondedAddress(i)) == selectedId()) selectedBonded = true;
+  if (!selectedBonded) clearSelection("selected_host_missing");
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEDevice::setSecurityPasskey(passkey);
@@ -537,7 +603,10 @@ void loop() {
   }
   static bool wasPairing = false;
   bool open = pairingOpen();
-  if (wasPairing != open) { advertisingNeeded = true; wasPairing = open; }
+  if (wasPairing != open) {
+    if (!open) { passkey = setupCode; NimBLEDevice::setSecurityPasskey(setupCode); }
+    advertisingNeeded = true; wasPairing = open;
+  }
   static bool wasIdentifying = false;
   bool identifying = identifyOpen();
   if (wasIdentifying != identifying) { wasIdentifying = identifying; applyAdvertisedName(); }
@@ -568,7 +637,7 @@ void loop() {
     JsonDocument doc; doc["id"] = deviceId;
     doc["state"] = WiFi.status() == WL_CONNECTED ? "connected" : setupStatus;
     doc["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
-    doc["setup_open"] = millis() <= provisionUntil;
+    doc["setup_open"] = setupOpen();
     String output; serializeJson(doc, output); statusCharacteristic->setValue(output.c_str());
     statusCharacteristic->notify(); lastStatus = millis();
   }
