@@ -18,13 +18,16 @@ The keyboard exposes pairing, saved-host selection, keyboard input and pointer i
 | Tool privacy and error checks | macOS | Six focused tests passed, including private-file permissions. |
 | ESP32 firmware compilation | Windows Maxis, `bf56edb` | Passed; 59,044 bytes RAM and 1,120,861 bytes flash. |
 | ESP32 provisioning | Physical ESP32-D0WDQ6, USB setup | Wi-Fi connected; device-hosted MCP and keyboard-role mDNS discovered. |
-| ESP32 direct MCP | Physical board, actual Python MCP SDK | Initialization, six tools, status and pairing command passed. |
+| ESP32 direct MCP | Physical board, `bf56edb`, actual Python MCP SDK | Two endpoint acceptance tests passed: authentication / browser-origin rejection, initialization, six tools, status and unknown-tool handling. Pairing command also passed. |
+| mDNS discovery | macOS Bonjour and physical iPad app | App, screen and keyboard roles discovered. The iPad resolved the ESP32 endpoint directly. |
 | iOS build, install and launch | Mac / physical iPad and iPhone, `0ccab44` | Passed with development signing. |
 | iPhone rendered layout | Existing iPhone 16 Pro Max simulator, `0ccab44` | Passed; simulator evidence only. |
 | iPad native MCP and capture | Physical iPad Air 13 M3, `0ccab44` | Two direct screen acceptance tests passed, including real JPEG decoding and missing-token / browser-origin rejection. |
 | Broadcast initiation | Physical iPad | MCP opened Apple's Start Broadcast dialog; the paired developer UI tool confirmed it. |
 | Capture while another app is foregrounded | Physical iPad, `366da1a` | Direct screen MCP remained live with Settings foregrounded; decoded a fresh frame after 20 seconds. App MCP recovered on return. |
-| Bluetooth keyboard input and saved-host switching | Physical iPad / iPhone | Still under verification. The first connection exposed a subscription-before-authentication race, corrected in `0039ce8`. No physical input or A → B → A success is claimed yet. |
+| Bluetooth keyboard input and saved-host switching | Physical iPad / iPhone | Still under verification. The first connection exposed a subscription-before-authentication race, corrected in `0039ce8`. The subsequent `bf56edb` attempt reached the board, requested security successfully, then failed authentication with BLE link timeout (520); no bond was saved. Device proximity and an unlocked second target remain to be checked. No physical input or A → B → A success is claimed yet. |
+
+The obsolete installed Mac bridge executable has been removed and its server is stopped.
 
 The temporary XCTest control harness is a development tool for paired USB device setup and system dialogs. Product MCP endpoints run on the devices and do not depend on that harness.
 
