@@ -163,7 +163,9 @@ final class CompanionModel: ObservableObject {
           URL: \(endpoint.absoluteString)
           Header: Authorization: Bearer \(token)
 
-        Call its `help` tool first. It explains what this device can do, how to         reach the Bluetooth keyboard that types on it, and how to confirm that         the input you send actually landed.
+        Call its `help` tool first. It explains what this device can do, how to
+        reach the Bluetooth keyboard that types on it, and how to confirm that
+        the input you send actually landed.
         """
     }
 

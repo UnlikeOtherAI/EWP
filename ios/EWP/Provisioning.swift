@@ -218,6 +218,9 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
             set(.connected)
             return
         }
+        // A late status notification must not undo a finished setup, nor
+        // interrupt a write that is already in flight.
+        guard phase != .connected else { return }
         guard !phase.isBusy || phase == .preparing else { return }
         if setupOpen == true, self.characteristic != nil {
             set(.ready)

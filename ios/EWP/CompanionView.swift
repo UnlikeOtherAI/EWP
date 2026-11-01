@@ -9,6 +9,12 @@ struct CompanionView: View {
     @State private var showSetup = false
     @State private var poll: Task<Void, Never>?
 
+    /// One poll at a time, however often the view appears.
+    private func startPolling() {
+        poll?.cancel()
+        poll = Task { await model.run() }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -33,13 +39,13 @@ struct CompanionView: View {
             .refreshable { model.rescan() }
             .sheet(isPresented: $showSetup) { KeyboardSetupView(model: model) }
         }
-        .task { poll = Task { await model.run() }; await poll?.value }
+        .task { startPolling() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
                 model.server?.start()
                 model.rescan()
-                if poll == nil || poll?.isCancelled == true { poll = Task { await model.run() } }
+                startPolling()
             case .background:
                 // Nothing on screen to update, and an MCP caller refreshes state itself.
                 poll?.cancel(); poll = nil
