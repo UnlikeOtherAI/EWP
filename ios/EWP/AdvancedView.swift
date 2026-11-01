@@ -73,6 +73,7 @@ private struct MenuRow<Destination: View>: View {
                         .foregroundStyle(.tertiary)
                         .accessibilityHidden(true)
                 }
+                .contentShape(Rectangle())
             }
         }
         .buttonStyle(.plain)

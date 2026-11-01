@@ -189,18 +189,34 @@ private struct KeyboardCard: View {
     var body: some View {
         Card(header: "Keyboard", caption: caption) {
             if let keyboard = model.discovery.keyboards.first {
+                // Tapping it reopens setup: a board moved to a different
+                // network is the one reason to come back to this flow.
                 CardRow(divider: false) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "keyboard")
-                            .font(.title3)
-                            .foregroundStyle(Theme.accent)
-                            .frame(width: 28)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(keyboard.name).lineLimit(1)
-                            StatusLabel(text: "On Wi-Fi", color: .green).font(.footnote)
+                    Button { showSetup = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "keyboard")
+                                .font(.title3)
+                                .foregroundStyle(Theme.accent)
+                                .frame(width: 28)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(keyboard.name).foregroundStyle(.primary).lineLimit(1)
+                                StatusLabel(text: "On this network", color: .green)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
                         }
+                        // A plain button only accepts taps on what it draws,
+                        // and most of this row is spacer.
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("keyboardDetail")
                 }
             } else {
                 CardRow(divider: false) {
@@ -225,6 +241,6 @@ private struct KeyboardCard: View {
     private var caption: String {
         model.discovery.keyboards.isEmpty
             ? "A keyboard board lets your agent type and click on this device, not just watch it."
-            : "Pair it with this device in Settings → Bluetooth to let your agent type here."
+            : "To let it type here, pair it with this device in Settings → Bluetooth."
     }
 }

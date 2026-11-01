@@ -72,8 +72,18 @@ struct KeyboardSetupView: View {
 
     @ViewBuilder private var findBody: some View {
         switch phase {
-        case .bluetoothOff, .bluetoothDenied:
+        case .bluetoothOff:
             Text(phase.message).font(.footnote).foregroundStyle(.secondary)
+        case .bluetoothDenied:
+            VStack(alignment: .leading, spacing: 10) {
+                Text(phase.message).font(.footnote).foregroundStyle(.secondary)
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .font(.subheadline.weight(.semibold))
+            }
         case .scanning:
             Text("Make sure the keyboard has power. It accepts setup for five minutes after it starts.")
                 .font(.footnote).foregroundStyle(.secondary)

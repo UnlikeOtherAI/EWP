@@ -95,7 +95,13 @@ final class CompanionModel: ObservableObject {
         server?.start(); discovery.start()
         while !Task.isCancelled {
             await refreshCaptureState()
-            try? await Task.sleep(for: .seconds(sharing == .requesting ? 0.5 : 2))
+            // Each idle tick is a refused connection to a extension that is not
+            // running, so only poll quickly when something is expected to change.
+            switch sharing {
+            case .requesting: try? await Task.sleep(for: .milliseconds(500))
+            case .live: try? await Task.sleep(for: .seconds(2))
+            case .off: try? await Task.sleep(for: .seconds(5))
+            }
         }
     }
 
