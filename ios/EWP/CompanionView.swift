@@ -59,6 +59,7 @@ struct CompanionView: View {
             }
             .refreshable { model.rescan() }
             .sheet(isPresented: $showSetup) { KeyboardSetupView(model: model) }
+            .overlay { if model.identifying { IdentifyFlash(name: model.displayName) } }
         }
         .task { startPolling() }
         .onChange(of: scenePhase) { _, phase in
@@ -232,7 +233,7 @@ private struct KeyboardCard: View {
                                 .frame(width: 28)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(keyboard.name).foregroundStyle(.primary).lineLimit(1)
+                                Text(keyboard.title).foregroundStyle(.primary).lineLimit(1)
                                 StatusLabel(text: "On this network", color: .green)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -274,5 +275,33 @@ private struct KeyboardCard: View {
         model.discovery.keyboards.isEmpty
             ? "A keyboard board lets your agent type and click on this device, not just watch it."
             : "To let it type here, pair it with this device in Settings → Bluetooth."
+    }
+}
+
+
+/// What `identify` looks like: this device shouting its name across a room of
+/// identical hardware.
+private struct IdentifyFlash: View {
+    let name: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var bright = false
+
+    var body: some View {
+        ZStack {
+            Theme.accent
+            Text(name)
+                .font(.system(size: 64, weight: .heavy, design: .rounded))
+                .minimumScaleFactor(0.3)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .padding(40)
+        }
+        .ignoresSafeArea()
+        .opacity(bright || reduceMotion ? 1 : 0.55)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45).repeatForever(autoreverses: true), value: bright)
+        .onAppear { bright = true }
+        .transition(.opacity)
+        .accessibilityLabel("This device is \(name)")
     }
 }

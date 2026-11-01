@@ -5,6 +5,8 @@ import SwiftUI
 struct AdvancedView: View {
     @ObservedObject var model: CompanionModel
 
+    private var otherDevices: [DiscoveredDevice] { model.discovery.others(excluding: model.deviceID) }
+
     var body: some View {
         ScrollView {
             VStack(spacing: Theme.cardSpacing) {
@@ -16,7 +18,7 @@ struct AdvancedView: View {
                         AccessView(model: model)
                     }
                     MenuRow(title: "Network", icon: "antenna.radiowaves.left.and.right",
-                            detail: model.discovery.services.isEmpty ? nil : "\(model.discovery.services.count)") {
+                            detail: otherDevices.isEmpty ? nil : "\(otherDevices.count)") {
                         NetworkView(model: model)
                     }
                     MenuRow(title: "Screen Sharing", icon: "rectangle.on.rectangle",
@@ -103,9 +105,30 @@ private struct DetailScreen<Content: View>: View {
 
 private struct AboutDeviceView: View {
     @ObservedObject var model: CompanionModel
+    @State private var draft = ""
+    @State private var saved = false
+    @FocusState private var editing: Bool
 
     var body: some View {
         DetailScreen(title: "About This Device") {
+            Card(header: "Name",
+                 caption: "Published over mDNS, so your agent and anyone browsing the network sees this device by name rather than by its identifier.") {
+                CardRow(divider: false) {
+                    HStack(spacing: 12) {
+                        TextField("Name this device", text: $draft)
+                            .focused($editing)
+                            .submitLabel(.done)
+                            .onSubmit(save)
+                            .accessibilityIdentifier("thisDeviceName")
+                        if saved {
+                            Image(systemName: "checkmark").foregroundStyle(.green)
+                        } else if draft != model.deviceName {
+                            Button("Save", action: save).font(.body.weight(.semibold))
+                        }
+                    }
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: saved)
             Card(caption: "The app endpoint answers MCP requests. The screen endpoint exists only while a broadcast is running.") {
                 ValueRow(label: "Device ID", value: model.deviceID, monospaced: true)
                 ValueRow(label: "Service", value: model.serviceName)
@@ -116,6 +139,17 @@ private struct AboutDeviceView: View {
             Card(header: "Version") {
                 ValueRow(label: "EWP", value: Bundle.main.version, divider: false)
             }
+        }
+        .onAppear { draft = model.deviceName }
+    }
+
+    private func save() {
+        editing = false
+        model.rename(to: draft)
+        saved = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            saved = false
         }
     }
 }
@@ -144,36 +178,53 @@ private struct AccessView: View {
 private struct NetworkView: View {
     @ObservedObject var model: CompanionModel
 
+    private var devices: [DiscoveredDevice] { model.discovery.others(excluding: model.deviceID) }
+
     var body: some View {
         DetailScreen(title: "Network") {
-            Card(header: "EWP Endpoints",
-                 caption: "Every EWP endpoint advertising _mcp._tcp on this Wi-Fi, including this device.") {
-                if model.discovery.services.isEmpty {
+            Card(header: "Other EWP Devices",
+                 caption: "This device is not listed; it is under About This Device. A device that advertises more than one endpoint appears once.") {
+                if devices.isEmpty {
                     CardRow(divider: true) {
                         HStack(spacing: 10) {
                             if model.discovery.isSearching { ProgressView() }
-                            Text(model.discovery.isSearching ? "Looking for devices…" : "No devices found.")
+                            Text(model.discovery.isSearching ? "Looking for devices…" : "No other devices found.")
                                 .foregroundStyle(.secondary)
                         }
                     }
                 } else {
-                    ForEach(model.discovery.services) { service in
-                        CardRow(divider: true) {
-                            HStack(spacing: 12) {
-                                Image(systemName: service.role == "keyboard" ? "keyboard" : "ipad.and.iphone")
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 24)
-                                    .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(service.name).lineLimit(1)
-                                    Text(service.url.absoluteString)
-                                        .font(.caption.monospaced())
+                    ForEach(devices) { device in
+                        NavigationLink {
+                            DeviceDetailView(device: device, model: model)
+                        } label: {
+                            CardRow(divider: true) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: device.isKeyboard ? "keyboard" : "ipad.and.iphone")
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
+                                        .frame(width: 24)
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(device.title).foregroundStyle(.primary).lineLimit(1)
+                                        Text(device.roles.joined(separator: " · "))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 8)
+                                    if model.remote.hasToken(for: device.id) {
+                                        Image(systemName: "key.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                            .accessibilityLabel("Access token saved")
+                                    }
+                                    Image(systemName: "chevron.right")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
+                                        .accessibilityHidden(true)
                                 }
+                                .contentShape(Rectangle())
                             }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 if let error = model.discovery.error {
@@ -233,13 +284,5 @@ private struct DiagnosticsView: View {
                 }
             }
         }
-    }
-}
-
-extension Bundle {
-    var version: String {
-        let short = object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        let build = object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        return "\(short) (\(build))"
     }
 }

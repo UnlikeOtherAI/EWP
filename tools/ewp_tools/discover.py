@@ -25,6 +25,7 @@ class Devices:
         addresses = info.parsed_scoped_addresses()
         host = info.server.rstrip('.')
         value = dict(service=name, device_id=props.get('id', ''), role=props.get('role', ''),
+                     name=props.get('name', ''), firmware=props.get('fw', ''),
                      endpoint=f"http://{host}:{info.port}{props.get('path', '/mcp')}", addresses=addresses)
         with self.lock:
             self.entries[name] = value
@@ -53,8 +54,9 @@ def report(entries):
                 "EWP app is open on at least one of them, and that the network does not\n"
                 "block multicast DNS.")
     def label(entry):
-        # Strip the service type; the instance name is what identifies a device.
-        return entry['service'].split('._mcp._tcp.')[0]
+        # A named device is called by its name; otherwise fall back to the
+        # instance name with the service type stripped off.
+        return entry.get('name') or entry['service'].split('._mcp._tcp.')[0]
 
     width = max(len(label(entry)) for entry in entries)
     lines = [f"Found {len(entries)} EWP endpoint{'s' if len(entries) > 1 else ''}.", '']

@@ -27,6 +27,7 @@ enum Reachability: Equatable {
 final class CompanionModel: ObservableObject {
     let discovery = Discovery()
     let provisioning = Provisioning()
+    let remote = RemoteDevices()
     @Published var ssid = ""
     @Published var password = ""
     @Published var captureLive = false
@@ -35,6 +36,10 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var serverReady = false
     @Published private(set) var tokenCopied = false
     @Published private(set) var promptCopied = false
+    @Published private(set) var deviceName = ""
+    /// Set while this device is announcing itself so a person can pick it out
+    /// of a wall of identical phones.
+    @Published private(set) var identifying = false
     @Published var error: String?
     /// Set when this device could not create or read its own access key, which
     /// leaves it unable to serve MCP at all.
@@ -47,6 +52,7 @@ final class CompanionModel: ObservableObject {
     weak var broadcastPicker: RPSystemBroadcastPickerView?
 
     var deviceID: String { configuration?.deviceID ?? "" }
+    var displayName: String { configuration?.displayName ?? "" }
     var serviceName: String { server?.serviceName ?? "" }
     var port: UInt16 { server?.port ?? 7801 }
 
@@ -61,9 +67,14 @@ final class CompanionModel: ObservableObject {
         do {
             let configuration = try Configuration.getOrCreate()
             self.configuration = configuration
+            deviceName = configuration.name ?? ""
             setupFailure = nil
             let tools = [
                 MCPTool(name: "help", description: "Explain what this device is, what it can do, how to reach the keyboard that types on it, and what its results do and do not prove. Call this first."),
+                MCPTool(name: "set_name", description: "Give this device a human name. It persists, is published over mDNS, and is how people and agents tell one device on a wall from another.",
+                        properties: ["name": ["type": "string", "maxLength": 32]], required: ["name"]),
+                MCPTool(name: "identify", description: "Make this device announce itself on screen so a person can find it physically.",
+                        properties: ["seconds": ["type": "integer", "minimum": 1, "maximum": 30]], required: []),
                 MCPTool(name: "get_status", description: "Read this iPhone/iPad's MCP, screen-sharing and ESP32 setup state."),
                 MCPTool(name: "get_screen", description: "Get this app's screen, or the shared device screen when a broadcast is live."),
                 MCPTool(name: "start_screen_sharing", description: "Open Apple's screen-sharing confirmation on this device. Success means the dialog was requested; check get_status for live frames."),
@@ -141,6 +152,27 @@ final class CompanionModel: ObservableObject {
         return .verifying
     }
 
+    /// Renames this device and re-advertises so the wall sees it at once.
+    func rename(to name: String) {
+        guard let configuration else { return }
+        do {
+            let updated = try configuration.renamed(to: name)
+            self.configuration = updated
+            deviceName = updated.name ?? ""
+            server?.rename(to: updated)
+            error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func identify(seconds: Int = 3) {
+        guard !identifying else { return }
+        identifying = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(min(30, max(1, seconds))))
+            self?.identifying = false
+        }
+    }
+
     func retry() {
         configure()
         server?.start()
@@ -157,7 +189,7 @@ final class CompanionModel: ObservableObject {
     var agentPrompt: String? {
         guard let endpoint, let token = configuration?.token else { return nil }
         return """
-        You can see and control my \(UIDevice.current.model) over MCP.
+        You can see and control my \(UIDevice.current.model), named "\(displayName)", over MCP.
 
         Add this MCP server:
           URL: \(endpoint.absoluteString)
@@ -171,6 +203,8 @@ final class CompanionModel: ObservableObject {
 
     private func help() -> [String: Any] {
         ["device": UIDevice.current.model,
+         "name": configuration?.displayName ?? "",
+         "id": configuration?.deviceID ?? "",
          "role": "app",
          "summary": "An iPhone or iPad that an MCP client can watch and, with a paired EWP keyboard, control.",
          "getting_started": [
@@ -247,7 +281,8 @@ final class CompanionModel: ObservableObject {
     }
 
     private func status() -> [String: Any] {
-        ["device_id": configuration?.deviceID ?? "", "server": serverStatus, "screen_sharing_live": captureLive,
+        ["device_id": configuration?.deviceID ?? "", "name": configuration?.displayName ?? "",
+         "server": serverStatus, "screen_sharing_live": captureLive,
          "screen_mcp_port": 7802, "bluetooth": provisioning.message, "wifi_setup_ready": provisioning.ready, "selected_keyboard": provisioning.selectedBluetoothID ?? "",
          "nearby_keyboards": provisioning.nearby.map { ["bluetooth_id": $0.identifier.uuidString, "name": provisioning.displayName($0)] },
          "mcp_devices": discovery.services.map { ["name": $0.name, "endpoint": $0.url.absoluteString, "role": $0.role] },
@@ -257,6 +292,17 @@ final class CompanionModel: ObservableObject {
     private func call(_ name: String, _ args: [String: Any]) async throws -> [[String: Any]] {
         switch name {
         case "help": return try MCPServer.text(help())
+        case "set_name":
+            guard let name = args["name"] as? String else { throw EWPError.message("Provide a name.") }
+            guard let configuration else { throw EWPError.message("This device has no access key yet.") }
+            let updated = try configuration.renamed(to: name)
+            self.configuration = updated
+            deviceName = updated.name ?? ""
+            server?.rename(to: updated)
+            return try MCPServer.text(["name": updated.displayName, "id": updated.deviceID])
+        case "identify":
+            identify(seconds: args["seconds"] as? Int ?? 3)
+            return try MCPServer.text(["identifying": true, "name": configuration?.displayName ?? ""])
         case "get_status":
             await refreshCaptureState()
             return try MCPServer.text(status())

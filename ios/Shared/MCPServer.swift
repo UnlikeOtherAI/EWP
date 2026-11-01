@@ -22,7 +22,7 @@ final class MCPServer: ObservableObject {
     /// The mDNS instance name a client browses for.
     private(set) var serviceName = ""
     let port: UInt16
-    private let configuration: Configuration
+    private var configuration: Configuration
     private let role: String
     private let tools: [MCPTool]
     private let call: (String, [String: Any]) async throws -> [[String: Any]]
@@ -49,7 +49,11 @@ final class MCPServer: ObservableObject {
             parameters.allowLocalEndpointReuse = true
             let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
             var txt = Data()
-            for entry in ["path=/mcp", "role=\(role)", "id=\(configuration.deviceID)"] {
+            // A client browsing a wall of devices needs the human name here;
+            // the instance name stays id-based so renaming cannot collide.
+            let entries = ["path=/mcp", "role=\(role)", "id=\(configuration.deviceID)",
+                           "name=\(configuration.displayName)", "fw=\(Bundle.main.version)"]
+            for entry in entries where entry.utf8.count <= 255 {
                 txt.append(UInt8(entry.utf8.count)); txt.append(contentsOf: entry.utf8)
             }
             serviceName = "EWP \(role) \(configuration.deviceID.prefix(8))"
@@ -200,6 +204,17 @@ final class MCPServer: ObservableObject {
             connection.cancel()
             Task { @MainActor in self?.close(id) }
         })
+    }
+
+    /// Re-advertises under the new name. Bonjour has no way to amend a TXT
+    /// record in place through NWListener, so the listener is replaced.
+    func rename(to configuration: Configuration) {
+        self.configuration = configuration
+        guard shouldRun else { return }
+        let listener = self.listener
+        self.listener = nil
+        listener?.cancel()
+        start()
     }
 
     static func text(_ value: [String: Any]) throws -> [[String: Any]] {

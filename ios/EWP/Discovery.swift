@@ -7,6 +7,31 @@ struct Service: Identifiable, Equatable {
     let url: URL
     let role: String
     let deviceID: String
+    /// The human name the device publishes, when it has one.
+    let givenName: String?
+    let firmware: String?
+}
+
+/// One physical device, however many endpoints it advertises. A phone shows
+/// up twice while it is sharing its screen; a person sees one device.
+struct DiscoveredDevice: Identifiable, Equatable {
+    let id: String
+    let endpoints: [Service]
+
+    var isKeyboard: Bool { endpoints.contains { $0.role == "keyboard" } }
+    var roles: [String] { endpoints.map(\.role).sorted() }
+    var givenName: String? { endpoints.compactMap(\.givenName).first { !$0.isEmpty } }
+    var firmware: String? { endpoints.compactMap(\.firmware).first }
+
+    /// The endpoint to talk to: a board has one, a phone answers on its app.
+    var primary: Service? {
+        endpoints.first { $0.role == "app" } ?? endpoints.first { $0.role == "keyboard" } ?? endpoints.first
+    }
+
+    var title: String {
+        if let givenName, !givenName.isEmpty { return givenName }
+        return primary?.name ?? id
+    }
 }
 
 @MainActor
@@ -17,8 +42,20 @@ final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceDel
     private var browser: NWBrowser?
     private var resolving: [NetService] = []
 
-    /// Keyboards are the only discovered role a person acts on in the app.
-    var keyboards: [Service] { services.filter { $0.role == "keyboard" } }
+    /// Keyboards are the only discovered role a person acts on from home.
+    var keyboards: [DiscoveredDevice] { devices.filter(\.isKeyboard) }
+
+    /// Endpoints folded into the devices that host them, named devices first.
+    var devices: [DiscoveredDevice] {
+        Dictionary(grouping: services.filter { !$0.deviceID.isEmpty }, by: \.deviceID)
+            .map { DiscoveredDevice(id: $0.key, endpoints: $0.value.sorted { $0.role < $1.role }) }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    /// Everything except this device, which has its own screen in the app.
+    func others(excluding deviceID: String) -> [DiscoveredDevice] {
+        devices.filter { $0.id != deviceID }
+    }
 
     /// This device's own advertisement, once it has been seen on the network.
     /// Resolving ourselves proves a client on this Wi-Fi can reach us too.
@@ -79,7 +116,8 @@ final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceDel
         let id = sender.name + ":" + String(sender.port)
         services.removeAll { $0.id == id }
         services.append(Service(id: id, name: sender.name, url: url,
-                                role: value("role") ?? "mcp", deviceID: value("id") ?? ""))
+                                role: value("role") ?? "mcp", deviceID: value("id") ?? "",
+                                givenName: value("name"), firmware: value("fw")))
         isSearching = services.count < resolving.count
     }
 
