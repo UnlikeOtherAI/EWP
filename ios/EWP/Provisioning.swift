@@ -61,7 +61,7 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     var selectedName: String? { peripheral.map(displayName) }
 
     func displayName(_ device: CBPeripheral) -> String {
-        displayNames[device.identifier] ?? device.name ?? "UnlikeOtherAI Keyboard"
+        displayNames[device.identifier] ?? device.name ?? "EWP Keyboard"
     }
 
     private var central: CBCentralManager!

@@ -69,11 +69,11 @@ BLE Wi-Fi setup is authenticated and encrypted and opens for five minutes after 
 ## Pairing and switching targets
 
 1. Call the ESP32's `start_pairing`, optionally with a name for the new target. Existing bonds stay saved. Input stops while a new target is being paired.
-2. In the target's Bluetooth settings, pair **UnlikeOtherAI Keyboard …** using the returned pairing code. This works without EWP installed on the target.
+2. In the target's Bluetooth settings, pair the Bluetooth name that call returned — **EWP _name_**, or **EWP _last six MAC digits_** on a board that has not been named — using the `pairing_code` from that same call. Each pairing window issues a fresh code, so an earlier one will not work. This needs no EWP app on the target.
 3. Call `list_hosts` to see saved host IDs. They come from the bonded identity address, not a rotating Bluetooth address or a list position.
 4. Call `select_host` with the saved `host_id`; optionally pass `name` to label an existing bond. The ESP32 reserves input for that target and advertises with a connection allowlist. Poll `device_status` until that host subscribes before sending input.
 
-The central device decides whether and when to reconnect. An unavailable target leaves input disabled; the ESP32 must never silently route input to another bonded host. The current board configuration holds eight bonds. If full, pairing fails without deleting an old bond.
+The central device decides whether and when to reconnect. An unavailable target leaves input disabled; the ESP32 must never silently route input to another bonded host. The current board configuration holds eight bonds. If full, `start_pairing` fails rather than discarding one; call `forget_host` to free a slot deliberately.
 
 For pointer control on iPhone, enable **Settings → Accessibility → Touch → AssistiveTouch**. Keyboard navigation may require Full Keyboard Access. Initial pairing and these OS settings are one-time configuration.
 
@@ -84,12 +84,18 @@ Every endpoint exposes `help`. It returns what the device is, the order to use i
 | ESP32 tool | Purpose |
 | --- | --- |
 | `help` | What this board is, how to pair and select a target, what `notified` does not mean |
-| `device_status` | Firmware, Wi-Fi, pairing and selected-host state |
+| `device_status` | Name, firmware, Wi-Fi, pairing and selected-host state |
 | `list_hosts` | Persisted bonds, optional names and selected/connected state |
-| `start_pairing` | Open a three-minute pairing window; retain existing bonds |
+| `start_pairing` | Open a three-minute pairing window with a fresh code; retain existing bonds |
+| `cancel_pairing` | Close that window now and go back to the selected host |
 | `select_host` | Select one saved target; reject input until it reconnects |
-| `press_key` | Press/release one HID usage with optional modifier bitmask |
-| `move_pointer` | Relative motion, wheel scrolling or a left click |
+| `forget_host` | Delete one bond to free a slot; needs `confirm` with the board's id |
+| `set_name` | Name the board; the name reaches the Bluetooth name, mDNS and every tool description |
+| `identify` | Make the board announce itself so you can find it on a wall |
+| `press_key` | Press/release one HID usage on `host_id`, with an optional modifier bitmask |
+| `move_pointer` | Relative motion, wheel scrolling or a left click on `host_id` |
+
+Input tools take the `host_id` you selected, so a second agent calling `select_host` cannot silently redirect your keystrokes. Every tool that changes something accepts a `request_id`, and repeating one returns the first result instead of acting twice.
 
 | iOS app tool | Purpose |
 | --- | --- |

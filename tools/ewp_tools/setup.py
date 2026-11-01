@@ -35,6 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', required=True)
     parser.add_argument('--expected-id', default='')
+    parser.add_argument('--name', help='Name this board so people and agents can tell it apart on a wall')
     parser.add_argument('--wifi-file', help='Private JSON file with ssid and password; never put credentials in command arguments')
     parser.add_argument('--output-dir', default=str(Path.home() / '.config/ewp'))
     args = parser.parse_args()
@@ -59,6 +60,9 @@ def main():
         output = Path(args.output_dir).expanduser()
         private_write(output / (device + '.token'), token)
         private_write(output / (device + '.pin'), str(access['pairing_code']).zfill(6))
+        if args.name:
+            named = request(port, {'method': 'set_name', 'name': args.name}, 'name')
+            print('Name:', named['name'])
         if args.wifi_file:
             source = Path(args.wifi_file).expanduser()
             if os.name != 'nt' and source.stat().st_mode & 0o077:
@@ -71,6 +75,8 @@ def main():
                 raise ValueError('Board rejected Wi-Fi setup')
             print('Wi-Fi configuration submitted to the ESP32.')
         print('Device:', device)
+        if not args.name and not access.get('name'):
+            print('No name set. Pass --name to label this board.')
         print('MCP credential saved privately:', output / (device + '.token'))
         print('Pairing PIN saved privately:', output / (device + '.pin'))
 

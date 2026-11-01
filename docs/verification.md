@@ -63,6 +63,30 @@ missing Bluetooth at step one and leaves the remaining steps pending.
 | Tool tests | macOS | Ten tests passed, two skipped as Windows-only. |
 | mDNS discovery and the `ewp-discover` CLI | macOS, live network | Four real endpoints found, including a physical ESP32 and iPad. |
 
+## Identity, naming and firmware safety
+
+Added after an architecture review of the 200-device wall. The review is in
+[architecture-review.md](architecture-review.md).
+
+| Check | Host / source | Result |
+| --- | --- | --- |
+| ESP32 firmware compilation | Mac, PlatformIO 6.1.18 | Passed after merge. 1,137,289 bytes flash (86.8%), 59,764 bytes RAM (18.2%). |
+| iOS build | Mac, Xcode 27.1 | Passed. |
+| Tool tests | macOS | 43 passed, 2 skipped as Windows-only. |
+| Device naming end to end | iPhone 16 Pro Max simulator and macOS Bonjour | Passed. A name entered in the app persisted, re-advertised, and appeared in `ewp-discover` in place of the identifier. |
+| Device list grouping | iPhone simulator, live network | Passed. A physical iPad advertising app and screen endpoints appeared as one device; this device was excluded. |
+
+**Nothing in this round was run on an ESP32.** The firmware changes — full
+48-bit device ids, per-pairing passkeys, host-bound input, `forget_host`,
+`set_name`, `identify`, the CCCD store size and the pairing-starvation fix —
+are compile-verified only. The bond-overflow fault they address was found by
+reading NimBLE's default store callback, not by reproducing it on hardware.
+Flashing a board and re-running the Bluetooth acceptance checks is still
+outstanding, and the earlier Bluetooth result above has not been re-attempted.
+
+Renaming a board from the app needs that board's access token, which the app
+cannot obtain over Bluetooth yet; the review's P3 covers that handoff.
+
 The `help` tool was added to all three endpoints but has not been exercised
 against a physical board or a real MCP client. Keyboard delivery, automatic
 reconnection, persistence across reboot and pointer delivery remain as
