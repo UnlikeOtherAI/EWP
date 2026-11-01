@@ -22,6 +22,15 @@ final class USBControlTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let requestURL = folder.appendingPathComponent("request.json")
         let responseURL = folder.appendingPathComponent("response.json")
+        // Reconcile an abandoned request before accepting this new session.
+        // In particular, a delayed stop must never terminate a later run.
+        if let data = try? Data(contentsOf: requestURL),
+           let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let id = request["id"] as? String {
+            try JSONSerialization.data(withJSONObject: ["id": id, "ok": false, "error": "UI session restarted; take a new snapshot."])
+                .write(to: responseURL, options: .atomic)
+            try FileManager.default.removeItem(at: requestURL)
+        }
         var processed = Set<String>()
         let deadline = Date().addingTimeInterval(3500)
         while Date() < deadline {
@@ -55,6 +64,14 @@ final class USBControlTests: XCTestCase {
                     app = XCUIApplication(bundleIdentifier: bundle)
                     self.bundle = bundle
                     app.activate()
+                    response["state"] = snapshot()
+                } else if command == "tap_point" {
+                    guard request["snapshot_id"] as? String == snapshotID,
+                          Date().timeIntervalSince(snapshotDate) < 120,
+                          let x = request["x"] as? Double, let y = request["y"] as? Double,
+                          (0...1).contains(x), (0...1).contains(y) else { throw ControlError.stale }
+                    XCUIApplication(bundleIdentifier: "com.apple.springboard")
+                        .coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
                     response["state"] = snapshot()
                 } else {
                     guard request["snapshot_id"] as? String == snapshotID,
@@ -101,7 +118,7 @@ final class USBControlTests: XCTestCase {
         var result: [[String: Any]] = []
         var roots = [app]
         let system = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        if system.alerts.firstMatch.exists { roots.append(system) }
+        roots.append(system)
         for root in roots {
             guard let tree = try? root.snapshot() else { continue }
             var occurrences: [String: Int] = [:]

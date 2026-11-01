@@ -1,12 +1,14 @@
 [project]
-name = "ewp-bridge"
+name = "ewp-tools"
 version = "0.1.0"
-description = "Expensive Wall of Phones local screen and HID MCP bridge"
+description = "Optional EWP discovery, direct MCP clients and device acceptance tools"
 requires-python = ">=3.11"
-dependencies = ["mcp>=1.20,<2", "zeroconf>=0.148,<1", "Pillow>=12,<13"]
+dependencies = ["mcp>=1.20,<2", "zeroconf>=0.148,<1", "Pillow>=12,<13", "pyserial>=3.5,<4"]
 
 [project.scripts]
-ewp = "ewp.server:main"
+ewp-setup = "ewp_tools.setup:main"
+ewp-discover = "ewp_tools.discover:main"
+ewp-ui-test = "ewp_tools.ui:main"
 
 [build-system]
 requires = ["setuptools>=77"]

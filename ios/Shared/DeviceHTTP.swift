@@ -24,6 +24,10 @@ final class DeviceHTTP: NSObject, URLSessionTaskDelegate {
         guard (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = json["result"] as? [String: Any] else { throw EWPError.message("Screen-sharing MCP is not running.") }
+        if result["isError"] as? Bool == true {
+            let content = result["content"] as? [[String: Any]]
+            throw EWPError.message(content?.first?["text"] as? String ?? "Screen-sharing request failed.")
+        }
         return result
     }
 

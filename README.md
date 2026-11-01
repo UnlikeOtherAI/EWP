@@ -1,112 +1,112 @@
 # EWP — Expensive Wall of Phones
 
-An ESP32 keyboard and mouse, an iPhone/iPad screen-sharing app, and a local MCP server for Claude. No cloud service or Nessie integration is required.
+EWP gives a phone or tablet eyes and a Bluetooth keyboard/mouse that an MCP client can control directly. The ESP32 and the iPhone/iPad app each host MCP on the device and advertise it through mDNS. There is no computer bridge, cloud service or Nessie dependency.
 
-The companion app discovers the ESP32 and the computer bridge through Bonjour. It can configure 2.4 GHz Wi-Fi over BLE. After you confirm Apple's screen broadcast dialog, a ReplayKit extension sends JPEG frames to the bridge. Claude reads those frames and sends keyboard or relative pointer input through the ESP32.
+The ESP32 also works with devices that have no EWP app. Pair them once in their Bluetooth settings; the board keeps their bonds and exposes pairing and host selection through its own MCP.
 
-This is an early prototype. Firmware compilation, application builds, transport tests, and physical-device acceptance are separate checks; see [verification](docs/verification.md) for what was actually tested.
+## Direct endpoints
 
-## Hardware and software
+All endpoints use authenticated, stateless MCP Streamable HTTP at `/mcp` and advertise `_mcp._tcp.local.` with `id`, `role` and `path` TXT records. Credentials are never advertised.
 
-- ESP32-DevKitC V4 with an ESP32 module supporting BLE. The connected development board is an ESP32-D0WDQ6 revision 1, with 4 MB flash and a CP2102 USB serial bridge.
-- iPhone or iPad running iOS/iPadOS 17 or later. An Apple development team is needed to install the companion app from source.
-- A computer on the same trusted local network, Python 3.11+, and [uv](https://docs.astral.sh/uv/).
-- Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) for the Apple app; [PlatformIO](https://docs.platformio.org/) for the firmware.
+| Endpoint | Runs on | Purpose |
+| --- | --- | --- |
+| Keyboard MCP, port 80 | ESP32 | Pair targets, select a saved host, send keyboard/mouse input |
+| App MCP, port 7801 | iPhone/iPad app | Inspect the app, provision Wi-Fi, discover devices, initiate screen sharing |
+| Screen MCP, port 7802 | The app's ReplayKit extension on the same iPhone/iPad | Read the whole screen while other apps are foregrounded; stop sharing |
 
-The ESP32 acts as a BLE peripheral; USB powers/programs it. A classic ESP32 cannot act as a native USB keyboard through its CP2102 port. The phone/tablet must pair with its Bluetooth keyboard/mouse.
+The screen endpoint runs in the broadcast extension because iOS suspends ordinary apps in the background. It is part of the iOS app, on the iOS device. Frames stay in that process's memory; no receiver on another computer is involved. Both iOS advertisements carry the same device ID.
 
-## Start the MCP bridge
+A client discovers these endpoints and connects to them directly, with `Authorization: Bearer <device-token>`. An MCP client must support local HTTP Streamable HTTP endpoints; mDNS discovery does not automatically register tools in every client.
+
+For a one-off discovery check:
 
 ```sh
-uv sync --project bridge --frozen
-uv run --project bridge ewp
+uv run --project tools ewp-discover
 ```
 
-The command starts both the stdio MCP server and the local HTTP frame receiver, on port 8765. It advertises `_ewpbridge._tcp` through Bonjour. Use `--advertise-ip 192.168.1.10` to select an interface on a computer with several network connections. Use `--http-only` for manual receiver testing without an MCP client; do not run two receivers on the same port.
+This command lists endpoints and exits. It does not serve or forward MCP.
 
-On first start, EWP creates a random pairing token in `~/.config/ewp/token`. Copy that token into the companion app's **Pairing token** field. Keep this file private. The same token authenticates the ESP32 after Wi-Fi setup. Neither tokens nor frames are written to application logs.
+## One-time setup
 
-For Claude Desktop, add an `ewp` entry to your existing `mcpServers` configuration, replacing the paths with absolute paths on your computer:
+### iPhone or iPad
 
-```json
-{
-  "mcpServers": {
-    "ewp": {
-      "command": "/absolute/path/to/uv",
-      "args": ["run", "--project", "/absolute/path/to/EWP/bridge", "ewp"]
-    }
-  }
-}
+Build the shared iOS app with Xcode, select your development team for **EWP** and **Broadcast**, then install **EWP**. Both targets share the `$(AppIdentifierPrefix)com.unlikeotherai.ewp` Keychain group. No App Group or Mac service is needed.
+
+```sh
+xcodegen generate --spec ios/project.yml
+open ios/EWP.xcodeproj
 ```
 
-Keep existing MCP server entries when editing this file. Start the bridge through Claude instead of running a second copy in a terminal.
+Allow Bluetooth and Local Network access. EWP creates its own random MCP credential in Keychain and advertises its app endpoint. **Copy MCP access token** copies that credential for the client you are configuring.
 
-## Build and flash the ESP32
+Call `start_screen_sharing` over the app's MCP to initiate Apple's screen-broadcast flow. Confirm **Start Broadcast** in the system dialog. This is a request for visible system capture, not silent authorization. Use the screen endpoint for eyes while controlling other apps.
+
+### ESP32
+
+The development board is an ESP32-DevKitC V4 with an ESP32-D0WDQ6 revision 1, 4 MB flash and a CP2102 serial bridge. USB supplies power/programming; the keyboard and mouse use Bluetooth, not USB HID.
+
+Build and flash the firmware with PlatformIO:
 
 ```sh
 uvx --from platformio==6.1.18 --with pip platformio run --project-dir firmware
-uvx --from platformio==6.1.18 --with pip platformio run --project-dir firmware --target upload --upload-port /dev/cu.usbserial-0001
-uvx --from platformio==6.1.18 --with pip platformio device monitor --port /dev/cu.usbserial-0001 --baud 115200
+uvx --from platformio==6.1.18 --with pip platformio run --project-dir firmware \
+  --target upload --upload-port /dev/cu.usbserial-0001
 ```
 
-Choose the actual serial port for your machine. If the USB link is unreliable, use 115200 baud for uploading. Preserve existing firmware before replacing it if it may contain something you need; never publish a flash backup containing credentials.
+Choose the actual serial port. Use 115200 baud on an unreliable USB link. Preserve existing firmware and settings before replacing a board's software.
 
-The serial console prints the board's name and its six-digit Bluetooth pairing code. This board has no display. Keep that code available for the initial iOS pairing dialog. Wi-Fi provisioning is open for five minutes after reset; resetting the board reopens setup without deleting the stored Wi-Fi connection or bonds.
-
-For a read-only hardware check before pairing, on macOS run `xcrun swift firmware/check_ble.swift --name ewp-your-board-name`. This checks the advertised services and reads the provisioning status; it does not enter Wi-Fi credentials or send input.
-
-## Install and connect the companion app
+For Wi-Fi, choose the nearby keyboard in EWP and enter a 2.4 GHz network name and password. This provisions Wi-Fi only; the ESP32 keeps its own independent MCP token. Alternatively, configure it over USB without installing the app:
 
 ```sh
-cd ios
-xcodegen generate
-open EWP.xcodeproj
+uv run --project tools ewp-setup --port /dev/cu.usbserial-0001 \
+  --wifi-file /private/path/to/wifi.json
 ```
 
-Select your development team for **EWP** and **Broadcast**, then run **EWP** on the physical iPad/iPhone. Both targets share the `$(AppIdentifierPrefix)com.unlikeotherai.ewp` Keychain access group for the bridge connection. There is no separate App Group registration.
+The private JSON file contains `ssid` and `password` strings and must have mode `600` on macOS/Linux. Keep it outside the repository. The setup client boots the application through the CP2102 reset lines, provisions the board, saves its MCP token and pairing PIN privately under `~/.config/ewp/`, and exits. Running it without `--wifi-file` retrieves access information without changing Wi-Fi. It is a one-time setup tool, not a runtime dependency.
 
-1. Allow Bluetooth and Local Network access. Start the bridge on the computer.
-2. Choose the discovered bridge, enter its pairing token, and tap **Connect bridge**.
-3. Choose the nearby ESP32, enter the 2.4 GHz Wi-Fi name and password, then tap **Connect ESP32 to Wi-Fi**. Enter the serial-console pairing code if iOS asks. Wait for the app's Wi-Fi confirmation.
-4. In **Settings → Bluetooth**, pair the ESP32 keyboard. If it is already paired through provisioning, check that it is connected. One ESP32 controls one paired target in this version.
-5. For pointer control on iPhone, enable **Settings → Accessibility → Touch → AssistiveTouch**. Keyboard navigation may also need Full Keyboard Access, depending on the action.
-6. Return to EWP and tap the broadcast icon beside **Start screen sharing**. Select **EWP Screen Sharing** and confirm **Start Broadcast** in Apple's system interface.
+BLE Wi-Fi setup is authenticated and encrypted and opens for five minutes after reset. The board generates and retains its own MCP token in NVS. Neither ordinary boot logs nor mDNS contain that token.
 
-The app says **Screen sharing is live** only after the receiver has a recent frame. Stop sharing using the system recording indicator. Audio is ignored; only the latest screen frame is retained in memory, with no recording history.
+## Pairing and switching targets
+
+1. Call the ESP32's `start_pairing`, optionally with a name for the new target. Existing bonds stay saved. Input stops while a new target is being paired.
+2. In the target's Bluetooth settings, pair **UnlikeOtherAI Keyboard …** using the returned pairing code. This works without EWP installed on the target.
+3. Call `list_hosts` to see saved host IDs. They come from the bonded identity address, not a rotating Bluetooth address or a list position.
+4. Call `select_host` with the saved `host_id`. The ESP32 reserves input for that target and advertises with a connection allowlist. Poll `device_status` until that host subscribes before sending input.
+
+The central device decides whether and when to reconnect. An unavailable target leaves input disabled; the ESP32 must never silently route input to another bonded host. The current board configuration holds eight bonds. If full, pairing fails without deleting an old bond.
+
+For pointer control on iPhone, enable **Settings → Accessibility → Touch → AssistiveTouch**. Keyboard navigation may require Full Keyboard Access. Initial pairing and these OS settings are one-time configuration.
 
 ## MCP tools
 
-| Tool | Purpose |
+| ESP32 tool | Purpose |
 | --- | --- |
-| `list_devices` | List ESP32 input bridges and companion screen sessions. These have separate IDs. |
-| `device_status` | Check firmware identity and whether a HID host is subscribed. |
-| `get_screen` | Return the newest frame as an MCP image. Reject frames older than five seconds. |
-| `press_key` | Press and release a HID usage, with an optional modifier bitmask. |
-| `move_pointer` | Relative movement, wheel scrolling, or a left click. Deltas are −127…127. |
-| `wait_for_capture` | Wait for a new frame after manual broadcast confirmation. |
+| `device_status` | Firmware, Wi-Fi, pairing and selected-host state |
+| `list_hosts` | Persisted bonds, optional names and selected/connected state |
+| `start_pairing` | Open a three-minute pairing window; retain existing bonds |
+| `select_host` | Select one saved target; reject input until it reconnects |
+| `press_key` | Press/release one HID usage with optional modifier bitmask |
+| `move_pointer` | Relative motion, wheel scrolling or a left click |
 
-Use the ESP32 `id` from `input_devices` for input tools; use a `session_id` from `screens` for `get_screen`. The companion installation's `device_id` identifies its capture stream. HID notifications do not prove that iOS acted on input; inspect the following screen frame.
+| iOS app tool | Purpose |
+| --- | --- |
+| `get_status` | App/server, discovery, nearby keyboards and capture state |
+| `get_screen` | App screen, or shared device screen when capture is live |
+| `start_screen_sharing` | Initiate Apple's broadcast confirmation |
+| `stop_screen_sharing` | Stop the on-device broadcast |
+| `discover_devices` | Restart mDNS discovery and report nearby devices |
+| `configure_esp32` | Configure a nearby board's Wi-Fi through encrypted BLE |
 
-## Limits
+The screen endpoint exposes `get_status`, `get_screen` and `stop_screen_sharing`. It rejects frames older than five seconds. It retains only the latest JPEG, at up to 1280 pixels on the longer side and two frames per second; audio is ignored.
 
-- Bluetooth pairing and Apple's broadcast confirmation remain visible system interactions. Silent screen-capture authorization is not implemented.
-- Automatic capture startup, recovery from a locked phone, and switching one ESP32 between multiple phones are not implemented. The current firmware routes input to one subscribed host and rejects a second host.
-- ReplayKit is the compatibility path for this version. The iOS 27 ScreenCaptureKit path needs separate implementation and physical testing.
-- Bonjour needs a shared local network with multicast discovery. Guest Wi-Fi isolation and some VPNs block it. The bridge URL field provides a manual IPv4 or `.local` fallback.
-- Local HTTP carries frames and bearer credentials without transport encryption. Use a trusted LAN and do not forward the receiver or ESP32 ports to the internet. BLE provisioning uses authenticated, encrypted pairing.
-- This prototype has a latest-frame ceiling of 1280 pixels on the longer side and two frames per second. It is a visual-control feed, not a video recorder.
+A successful Bluetooth notification does not prove that the target acted on input. Verify the subsequent screen. Unlocking a locked device and bypassing system capture consent are not implemented.
 
-See the [enclosure](docs/enclosure.md) for the printable case and fit assumptions.
+Local HTTP is intended for a trusted LAN. Do not expose these ports to the internet. MCP credentials and screen frames must not be logged or committed.
 
-## Checks
+## Verification and enclosure
 
-```sh
-uv run --project bridge python -m unittest discover -s bridge/tests -v
-uvx --from platformio==6.1.18 --with pip platformio run --project-dir firmware
-xcodebuild -project ios/EWP.xcodeproj -scheme EWP -sdk iphonesimulator \
-  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
-```
+See [verification](docs/verification.md) for source revisions and the distinction between builds, direct MCP protocol checks and physical input/capture acceptance. The optional `tools/` package contains client and development-test utilities, not a product server.
 
-## License
+The [printable enclosure](docs/enclosure.md) includes Blender and STL sources. It remains a first-print design; physical fit and printing are unverified.
 
-[MIT](LICENSE).
+[MIT license](LICENSE).

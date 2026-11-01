@@ -24,6 +24,10 @@ final class MCPServer: ObservableObject {
     private let tools: [MCPTool]
     private let call: (String, [String: Any]) async throws -> [[String: Any]]
     private var listener: NWListener?
+    private var listenerID = UUID()
+    private var shouldRun = false
+    private var retryDelay: Double = 1
+    private var retry: Task<Void, Never>?
     private var connections: [UUID: NWConnection] = [:]
 
     init(configuration: Configuration, role: String, port: UInt16, tools: [MCPTool],
@@ -33,7 +37,9 @@ final class MCPServer: ObservableObject {
     }
 
     func start() {
+        shouldRun = true
         guard listener == nil else { return }
+        let generation = UUID(); listenerID = generation
         do {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
@@ -46,9 +52,20 @@ final class MCPServer: ObservableObject {
                                                   type: "_mcp._tcp", domain: "local.", txtRecord: txt)
             listener.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
+                    guard let self, self.listenerID == generation else { return }
                     switch state {
-                    case .ready: self?.status = "MCP ready on port \(self?.port ?? 0)"
-                    case .waiting(let error), .failed(let error): self?.status = "MCP unavailable: \(error.localizedDescription)"
+                    case .ready: self.status = "MCP ready on port \(self.port)"; self.retryDelay = 1
+                    case .waiting(let error): self.status = "MCP unavailable: \(error.localizedDescription)"
+                    case .failed(let error):
+                        self.status = "MCP unavailable: \(error.localizedDescription)"
+                        self.listener?.cancel(); self.listener = nil
+                        let delay = self.retryDelay; self.retryDelay = min(30, delay * 2)
+                        self.retry?.cancel()
+                        self.retry = Task { @MainActor [weak self] in
+                            try? await Task.sleep(for: .seconds(delay))
+                            guard !Task.isCancelled, let self, self.shouldRun else { return }
+                            self.start()
+                        }
                     default: break
                     }
                 }
@@ -62,6 +79,7 @@ final class MCPServer: ObservableObject {
     }
 
     func stop() {
+        shouldRun = false; listenerID = UUID(); retry?.cancel(); retry = nil
         listener?.cancel(); listener = nil
         for connection in connections.values { connection.cancel() }
         connections.removeAll()

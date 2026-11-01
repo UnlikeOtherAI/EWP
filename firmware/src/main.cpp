@@ -24,7 +24,7 @@ static uint8_t reportMap[] = {
 constexpr char SERVICE[] = "e7a00001-7c3d-4d21-a19a-455750000001";
 constexpr char CONFIG[] = "e7a00002-7c3d-4d21-a19a-455750000001";
 constexpr char STATUS_UUID[] = "e7a00003-7c3d-4d21-a19a-455750000001";
-struct Configuration { char ssid[33]; char password[65]; char token[65]; };
+struct Configuration { char ssid[33]; char password[65]; };
 QueueHandle_t configurationQueue;
 Preferences preferences;
 WebServer http(80);
@@ -43,6 +43,7 @@ uint32_t provisionUntil;
 bool mdnsStarted = false;
 portMUX_TYPE hidMux = portMUX_INITIALIZER_UNLOCKED;
 uint16_t hidHandle = BLE_HS_CONN_HANDLE_NONE;
+uint16_t pairingHandle = BLE_HS_CONN_HANDLE_NONE;
 
 void setHid(uint16_t handle) {
   portENTER_CRITICAL(&hidMux); hidHandle = handle; portEXIT_CRITICAL(&hidMux);
@@ -102,6 +103,8 @@ void appendStatus(JsonDocument &doc) {
   doc["selected_host"] = selectedId(); doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
   doc["pairing_open"] = pairingOpen(); doc["saved_hosts"] = NimBLEDevice::getNumBonds();
   doc["host_switching"] = true;
+  doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
+  doc["address"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
   if (!selectedId().isEmpty() && getHid() == BLE_HS_CONN_HANDLE_NONE) doc["state"] = "waiting_for_selected_host";
 }
 bool beginPairing(JsonDocument &out) {
@@ -110,6 +113,7 @@ bool beginPairing(JsonDocument &out) {
   for (int i=0; i<NimBLEDevice::getNumBonds() && i<8; ++i) strlcpy(excluded[i], hostId(NimBLEDevice::getBondedAddress(i)).c_str(), 32);
   portENTER_CRITICAL(&hidMux); memcpy(pairingExcluded, excluded, sizeof(excluded)); portEXIT_CRITICAL(&hidMux);
   setHid(BLE_HS_CONN_HANDLE_NONE);
+  portENTER_CRITICAL(&hidMux); pairingHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
   pairingUntil = millis()+180000;
   for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
   advertisingNeeded = true;
@@ -129,11 +133,22 @@ bool chooseHost(const String &id, JsonDocument &out) {
 }
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
+    if (pairingOpen()) {
+      bool accepted;
+      portENTER_CRITICAL(&hidMux);
+      accepted = pairingHandle == BLE_HS_CONN_HANDLE_NONE || pairingHandle == info.getConnHandle();
+      if (accepted) pairingHandle = info.getConnHandle();
+      portEXIT_CRITICAL(&hidMux);
+      if (!accepted) { server->disconnect(info.getConnHandle()); return; }
+    }
     server->updateConnParams(info.getConnHandle(), 12, 24, 0, 200);
     advertisingNeeded = true;
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int) override {
     if (getHid() == info.getConnHandle()) setHid(BLE_HS_CONN_HANDLE_NONE);
+    portENTER_CRITICAL(&hidMux);
+    if (pairingHandle == info.getConnHandle()) pairingHandle = BLE_HS_CONN_HANDLE_NONE;
+    portEXIT_CRITICAL(&hidMux);
     advertisingNeeded = true;
   }
   uint32_t onPassKeyDisplay() override { return passkey; }
@@ -169,13 +184,11 @@ class ProvisionCallbacks : public NimBLECharacteristicCallbacks {
     // Drop sensitive data from the readable characteristic immediately.
     characteristic->setValue("");
     if (value.size() > 512 || deserializeJson(doc, value.c_str(), value.size())) return;
-    String ssid = doc["ssid"] | "", password = doc["password"] | "", secret = doc["token"] | "";
-    if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 64 || secret.length() != 64) return;
-    for (auto c : secret) if (!isxdigit(c) || isupper(c)) return;
+    String ssid = doc["ssid"] | "", password = doc["password"] | "";
+    if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 64) return;
     Configuration config{};
     strlcpy(config.ssid, ssid.c_str(), sizeof(config.ssid));
     strlcpy(config.password, password.c_str(), sizeof(config.password));
-    strlcpy(config.token, secret.c_str(), sizeof(config.token));
     xQueueOverwrite(configurationQueue, &config);
   }
 } provisionCallbacks;
@@ -303,7 +316,7 @@ void setup() {
   provisionUntil = millis() + 300000;
   configurationQueue = xQueueCreate(1, sizeof(Configuration));
   hostEvents = xQueueCreate(1, sizeof(HostEvent));
-  reserveHost(preferences.getString("selected", ""));
+  reserveHost(preferences.isKey("selected") ? preferences.getString("selected") : "");
 
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true);
   token = preferences.isKey("token") ? preferences.getString("token") : "";
@@ -316,7 +329,7 @@ void setup() {
   if (!ssid.isEmpty()) WiFi.begin(ssid.c_str(), preferences.getString("password", "").c_str());
   keyboardName = "UnlikeOtherAI Keyboard " + deviceId.substring(deviceId.length() - 6);
   NimBLEDevice::init(keyboardName.c_str());
-  if (NimBLEDevice::getNumBonds() == 0 || selectedId().isEmpty()) pairingUntil = millis() + 300000;
+  if (NimBLEDevice::getNumBonds() < 8 && (NimBLEDevice::getNumBonds() == 0 || selectedId().isEmpty())) pairingUntil = millis() + 300000;
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEDevice::setSecurityPasskey(passkey);
@@ -358,7 +371,7 @@ void serialSetup() {
         String ssid = request["ssid"] | "", password = request["password"] | "";
         if (ssid.length() > 0 && ssid.length() <= 32 && password.length() <= 64) {
           Configuration config{}; strlcpy(config.ssid, ssid.c_str(), sizeof(config.ssid));
-          strlcpy(config.password, password.c_str(), sizeof(config.password)); strlcpy(config.token, token.c_str(), sizeof(config.token));
+          strlcpy(config.password, password.c_str(), sizeof(config.password));
           xQueueOverwrite(configurationQueue, &config); reply["submitted"] = true;
         } else reply["error"] = "Invalid Wi-Fi configuration";
       } else if (method == "status") appendStatus(reply);
@@ -385,7 +398,6 @@ void loop() {
   Configuration config;
   if (xQueueReceive(configurationQueue, &config, 0) == pdTRUE) {
     preferences.putString("ssid", config.ssid); preferences.putString("password", config.password);
-    preferences.putString("token", config.token); token = config.token;
     WiFi.disconnect(); WiFi.begin(config.ssid, config.password);
     memset(&config, 0, sizeof(config)); setupStatus = "joining";
   }

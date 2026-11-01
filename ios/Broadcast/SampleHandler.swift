@@ -14,6 +14,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var lastFrame: CFTimeInterval = 0
     private var running = false
     private var busy = false
+    private var orientationValue: UInt32 = 1
+    private var generation = 0
     @MainActor private var server: MCPServer?
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
@@ -28,9 +30,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
                 ]
                 let server = MCPServer(configuration: configuration, role: "screen", port: 7802, tools: tools) { [weak self] name, _ in
                     guard let self else { throw EWPError.message("Screen sharing has ended.") }
-                    let (frame, live) = self.latest()
+                    let (frame, live, orientation) = self.latest()
                     switch name {
-                    case "get_status": return try MCPServer.text(["device_id": configuration.deviceID, "live": live])
+                    case "get_status": return try MCPServer.text(["device_id": configuration.deviceID, "live": live, "sample_orientation": orientation])
                     case "get_screen":
                         guard live, let frame else { throw EWPError.message("No recent screen frame. Resume screen sharing on the device.") }
                         return [["type": "image", "data": frame.base64EncodedString(), "mimeType": "image/jpeg"]]
@@ -47,17 +49,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
         }
     }
 
-    private func latest() -> (Data?, Bool) {
+    private func latest() -> (Data?, Bool, UInt32) {
         lock.lock(); defer { lock.unlock() }
-        return (frame, running && frame != nil && CACurrentMediaTime() - received <= 5)
+        return (frame, running && frame != nil && CACurrentMediaTime() - received <= 5, orientationValue)
     }
 
     override func broadcastPaused() {
-        lock.lock(); running = false; frame = nil; received = 0; lock.unlock()
+        lock.lock(); running = false; frame = nil; received = 0; generation += 1; lock.unlock()
     }
     override func broadcastResumed() { lock.lock(); running = true; lock.unlock() }
     override func broadcastFinished() {
-        lock.lock(); running = false; frame = nil; received = 0; lock.unlock()
+        lock.lock(); running = false; frame = nil; received = 0; generation += 1; lock.unlock()
         Task { @MainActor in server?.stop(); server = nil }
     }
 
@@ -67,13 +69,14 @@ final class SampleHandler: RPBroadcastSampleHandler {
         let now = CACurrentMediaTime()
         guard running, !busy, now - lastFrame >= 0.5 else { lock.unlock(); return }
         busy = true; lastFrame = now
+        let expectedGeneration = generation
         lock.unlock()
         let orientation = (CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString,
                                             attachmentModeOut: nil) as? NSNumber)?.uint32Value ?? 1
         encodingQueue.async { [weak self] in
             guard let self else { return }
             autoreleasepool {
-                var image = CIImage(cvPixelBuffer: pixelBuffer)
+                var image = CIImage(cvPixelBuffer: pixelBuffer, options: [.applyOrientationProperty: false])
                 if let orientation = CGImagePropertyOrientation(rawValue: orientation) { image = image.oriented(orientation) }
                 let scale = min(1, 1280 / max(image.extent.width, image.extent.height))
                 image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
@@ -86,7 +89,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     }
                 }
                 self.lock.lock()
-                if self.running, let encoded { self.frame = encoded; self.received = CACurrentMediaTime() }
+                if self.running, self.generation == expectedGeneration, let encoded { self.frame = encoded; self.received = CACurrentMediaTime(); self.orientationValue = orientation }
                 self.busy = false
                 self.lock.unlock()
             }

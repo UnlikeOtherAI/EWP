@@ -34,6 +34,7 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     }
 
     func connect(_ device: CBPeripheral) {
+        if peripheral == device, device.state == .connected, characteristic != nil { ready = true; return }
         if let peripheral, peripheral != device { central.cancelPeripheralConnection(peripheral) }
         peripheral = device
         characteristic = nil
@@ -71,13 +72,12 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
         }
     }
 
-    func configure(ssid: String, password: String, token: String) throws {
+    func configure(ssid: String, password: String) throws {
         guard let peripheral, let characteristic else { throw EWPError.message("Choose an ESP32 first.") }
-        guard !ssid.isEmpty, ssid.utf8.count <= 32, password.utf8.count <= 64,
-              token.count == 64, token.allSatisfy({ "0123456789abcdef".contains($0) }) else {
-            throw EWPError.message("Enter the Wi-Fi name and the bridge's 64-character pairing token.")
+        guard !ssid.isEmpty, ssid.utf8.count <= 32, password.utf8.count <= 64 else {
+            throw EWPError.message("Enter the 2.4 GHz Wi-Fi name and password.")
         }
-        let data = try JSONSerialization.data(withJSONObject: ["ssid": ssid, "password": password, "token": token])
+        let data = try JSONSerialization.data(withJSONObject: ["ssid": ssid, "password": password])
         guard data.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
             throw EWPError.message("Wi-Fi setup exceeds the Bluetooth write limit.")
         }
