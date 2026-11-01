@@ -108,6 +108,33 @@ A successful Bluetooth notification does not prove that the target acted on inpu
 
 Local HTTP is intended for a trusted LAN. Do not expose these ports to the internet. MCP credentials and screen frames must not be logged or committed.
 
+## Choosing devices for a session
+
+A client that loads every endpoint of a large wall holds hundreds of tool schemas, and nothing in an endpoint says where on the wall it is. `ewp-fleet` is setup-time tooling for that. It reads mDNS and a file you keep, prints a report or writes a file, and exits. It carries no MCP traffic and nothing keeps running.
+
+Describe the wall in `~/.config/ewp/wall.json`, or pass `--wall`. The file holds names and positions, never tokens:
+
+```json
+{"devices": [
+  {"id": "ewp-240ac4a1b2c3", "name": "R4-CTRL-1", "role": "controller", "row": 4},
+  {"id": "9f0c1c64-0b7e-4c1d-9a55-3e0d2f6f7a10", "name": "R4-01", "role": "phone",
+   "row": 4, "col": 1, "controller": "R4-CTRL-1", "group": ["ios18"]}
+]}
+```
+
+`id` is the `device_id` that `ewp-discover --json` shows. `name` is 1-32 letters, digits, `-` or `_`; it becomes the MCP server name, so it prefixes every tool. `role` is `phone`, `tablet`, `computer` or `controller`. A `computer` runs no EWP endpoint and is only reached through its `controller`, which is the id or name of the board that types on the device. `token_file` defaults to `~/.config/ewp/<id>.token`, where `ewp-setup` leaves a board's token; save a phone's token there yourself from the app's Advanced → Access, with mode `600`. `address_hint` is a hostname tried only when mDNS does not show the device.
+
+```sh
+uv run --project tools ewp-fleet status
+uv run --project tools ewp-fleet compose --group row4 --out ~/sessions/row4.mcp.json
+```
+
+`status` listens for mDNS, asks each device that answers for its status, and prints one line per device: `ok`, `degraded` (found but not usable: the app is up and screen sharing is not, the token is rejected, two devices share an id), `missing`, or `n/a` for a computer. A phone is `ok` when its screen endpoint reports live frames. Endpoints on the network that are not in `wall.json` are listed after the wall. It exits non-zero unless every device is `ok`; `--json` gives the same result for a script. Uptime, reset reason and signal strength are shown once the firmware reports them.
+
+`compose` writes an MCP client configuration for the part of the wall one session needs. Choose with `--group` (a tag from `group`, or `row4` and `col2` from positions), `--device`, `--controller` (that controller and every device it serves) or `--all`; repeat the flags to combine. Whatever you choose brings the controller that types on it. A phone is represented by its screen endpoint and a controller by its keyboard endpoint, each as a server named after the device, so the client sees `mcp__R4-01__get_screen`. Endpoint URLs use the live mDNS hostname, falling back to `address_hint`. If a chosen device cannot be found nothing is written, unless you pass `--skip-missing`; an existing `--out` file is replaced only with `--force`.
+
+The output is the JSON that Claude Code reads with `claude --mcp-config`. It contains the chosen devices' bearer tokens, so it is written with mode `600`. Keep it out of git and shared folders, and delete it when the session is over. Token files must themselves be private, and tokens never appear in arguments or output.
+
 ## Verification and enclosure
 
 See [verification](docs/verification.md) for source revisions and the distinction between builds, direct MCP protocol checks and physical input/capture acceptance. The optional `tools/` package contains client and development-test utilities, not a product server.
