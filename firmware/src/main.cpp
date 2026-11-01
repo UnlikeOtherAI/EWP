@@ -44,6 +44,11 @@ bool mdnsStarted = false;
 portMUX_TYPE hidMux = portMUX_INITIALIZER_UNLOCKED;
 uint16_t hidHandle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t pairingHandle = BLE_HS_CONN_HANDLE_NONE;
+// Subscription can arrive before encryption completes. Keep it until the
+// authentication callback rather than waiting for iOS to subscribe twice.
+struct Subscription { uint16_t handle = BLE_HS_CONN_HANDLE_NONE; uint8_t reports = 0; };
+Subscription subscriptions[3];
+volatile int lastDisconnectReason = 0;
 
 void setHid(uint16_t handle) {
   portENTER_CRITICAL(&hidMux); hidHandle = handle; portEXIT_CRITICAL(&hidMux);
@@ -105,6 +110,8 @@ void appendStatus(JsonDocument &doc) {
   doc["selected_host"] = selectedId(); doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
   doc["pairing_open"] = pairingOpen(); doc["saved_hosts"] = NimBLEDevice::getNumBonds();
   doc["host_switching"] = true;
+  doc["ble_connections"] = NimBLEDevice::getServer()->getConnectedCount();
+  doc["last_disconnect_reason"] = lastDisconnectReason;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["address"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
   if (!selectedId().isEmpty() && getHid() == BLE_HS_CONN_HANDLE_NONE) doc["state"] = "waiting_for_selected_host";
@@ -133,6 +140,22 @@ bool chooseHost(const String &id, JsonDocument &out) {
   out["selected_host"] = id; out["connected"] = false; out["state"] = "waiting_for_selected_host";
   return true;
 }
+void acceptSubscribedHost(NimBLEConnInfo &info) {
+  bool subscribed = false;
+  for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle() && entry.reports) subscribed = true;
+  if (!subscribed || !info.isEncrypted() || !info.isAuthenticated()) return;
+  uint16_t current = getHid();
+  if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
+    NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
+  }
+  String id = hostId(info.getIdAddress());
+  if (pairingOpen()) {
+    reserveHost(id); pairingUntil = 0;
+    HostEvent event{}; strlcpy(event.id, id.c_str(), sizeof(event.id)); xQueueOverwrite(hostEvents, &event);
+    advertisingNeeded = true;
+  }
+  setHid(info.getConnHandle());
+}
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     if (pairingOpen()) {
@@ -143,10 +166,16 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       portEXIT_CRITICAL(&hidMux);
       if (!accepted) { server->disconnect(info.getConnHandle()); return; }
     }
+    for (auto &entry : subscriptions) if (entry.handle == BLE_HS_CONN_HANDLE_NONE) {
+      entry.handle = info.getConnHandle(); entry.reports = 0; break;
+    }
     server->updateConnParams(info.getConnHandle(), 12, 24, 0, 200);
+    NimBLEDevice::startSecurity(info.getConnHandle());
     advertisingNeeded = true;
   }
-  void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int) override {
+  void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
+    lastDisconnectReason = reason;
+    for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle()) entry = Subscription{};
     if (getHid() == info.getConnHandle()) setHid(BLE_HS_CONN_HANDLE_NONE);
     portENTER_CRITICAL(&hidMux);
     if (pairingHandle == info.getConnHandle()) pairingHandle = BLE_HS_CONN_HANDLE_NONE;
@@ -158,23 +187,18 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     if (!info.isEncrypted() || !info.isAuthenticated() ||
         (!permittedHost(info) && millis() > provisionUntil))
       NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+    else acceptSubscribedHost(info);
   }
 } serverCallbacks;
 
 class ReportCallbacks : public NimBLECharacteristicCallbacks {
-  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &info, uint16_t value) override {
-    if (!value || !info.isEncrypted() || !info.isAuthenticated()) return;
-    uint16_t current = getHid();
-    if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
-      NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
+  void onSubscribe(NimBLECharacteristic *report, NimBLEConnInfo &info, uint16_t value) override {
+    for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle()) {
+      uint8_t bit = report == keyboard ? 1 : 2;
+      if (value) entry.reports |= bit; else entry.reports &= ~bit;
+      if (!entry.reports && getHid() == info.getConnHandle()) setHid(BLE_HS_CONN_HANDLE_NONE);
     }
-    String id = hostId(info.getIdAddress());
-    if (pairingOpen()) {
-      reserveHost(id); pairingUntil = 0;
-      HostEvent event{}; strlcpy(event.id, id.c_str(), sizeof(event.id)); xQueueOverwrite(hostEvents, &event);
-      advertisingNeeded = true;
-    }
-    setHid(info.getConnHandle());
+    acceptSubscribedHost(info);
   }
 } reportCallbacks;
 
