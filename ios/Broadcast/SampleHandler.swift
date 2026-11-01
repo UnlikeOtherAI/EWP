@@ -24,6 +24,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             do {
                 let configuration = try Configuration.load()
                 let tools = [
+                    MCPTool(name: "help", description: "Explain what this endpoint is, how it relates to the device's app endpoint, and what its frames do and do not guarantee. Call this first."),
                     MCPTool(name: "get_status", description: "Check whether this device's screen broadcast has a recent frame."),
                     MCPTool(name: "get_screen", description: "Get the latest device screen, including other apps. Rejects frames older than five seconds."),
                     MCPTool(name: "stop_screen_sharing", description: "Stop this screen broadcast on the device.")
@@ -32,6 +33,23 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     guard let self else { throw EWPError.message("Screen sharing has ended.") }
                     let (frame, live, orientation) = self.latest()
                     switch name {
+                    case "help":
+                        return try MCPServer.text([
+                            "device_id": configuration.deviceID,
+                            "role": "screen",
+                            "summary": "The live screen of one iPhone or iPad, including whatever app is in front. It exists only while a person has a broadcast running on that device.",
+                            "getting_started": [
+                                "Call get_screen for the most recent frame.",
+                                "Call get_status to check that frames are still arriving before trusting what you last saw.",
+                                "Call stop_screen_sharing to end the broadcast.",
+                                "The same device also advertises a role 'app' endpoint. Use that one to start sharing, and to find the keyboard that types on this device."
+                            ],
+                            "important": [
+                                "Frames older than five seconds are refused rather than returned stale.",
+                                "This endpoint disappears when the broadcast ends. A connection failure usually means sharing stopped, not that the device is gone.",
+                                "Capture is at most 1280 px on the long side and about two frames per second, so fast animation is not reliably observable."
+                            ]
+                        ])
                     case "get_status": return try MCPServer.text(["device_id": configuration.deviceID, "live": live, "sample_orientation": orientation])
                     case "get_screen":
                         guard live, let frame else { throw EWPError.message("No recent screen frame. Resume screen sharing on the device.") }

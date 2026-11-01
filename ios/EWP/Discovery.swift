@@ -6,23 +6,38 @@ struct Service: Identifiable, Equatable {
     let name: String
     let url: URL
     let role: String
+    let deviceID: String
 }
 
 @MainActor
 final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceDelegate {
     @Published var services: [Service] = []
+    @Published private(set) var isSearching = false
     @Published var error: String?
     private var browser: NWBrowser?
     private var resolving: [NetService] = []
 
+    /// Keyboards are the only discovered role a person acts on in the app.
+    var keyboards: [Service] { services.filter { $0.role == "keyboard" } }
+
+    /// This device's own advertisement, once it has been seen on the network.
+    /// Resolving ourselves proves a client on this Wi-Fi can reach us too.
+    func own(deviceID: String) -> Service? {
+        services.first { $0.deviceID == deviceID && $0.role == "app" }
+    }
+
     func start() {
         guard browser == nil else { return }
+        isSearching = true
         let browser = NWBrowser(for: .bonjour(type: "_mcp._tcp", domain: "local."), using: .tcp)
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 switch state {
                 case .ready: self?.error = nil
-                case .waiting(let error), .failed(let error): self?.error = "Device discovery: \(error.localizedDescription)"
+                case .waiting(let error), .failed(let error):
+                    self?.error = "Device discovery: \(error.localizedDescription)"
+                    self?.isSearching = false
+                case .cancelled: self?.isSearching = false
                 default: break
                 }
             }
@@ -42,6 +57,7 @@ final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceDel
                 }
                 self.services.removeAll { !names.contains($0.name) }
                 self.resolving.removeAll { !names.contains($0.name) }
+                self.isSearching = self.services.count < names.count
             }
         }
         self.browser = browser
@@ -59,9 +75,16 @@ final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceDel
         guard let host = sender.hostName, sender.port > 0,
               let url = URL(string: "http://\(host):\(sender.port)/mcp") else { return }
         let txt = sender.txtRecordData().map(NetService.dictionary(fromTXTRecord:)) ?? [:]
-        let role = txt["role"].flatMap { String(data: $0, encoding: .utf8) } ?? "mcp"
+        func value(_ key: String) -> String? { txt[key].flatMap { String(data: $0, encoding: .utf8) } }
         let id = sender.name + ":" + String(sender.port)
         services.removeAll { $0.id == id }
-        services.append(Service(id: id, name: sender.name, url: url, role: role))
+        services.append(Service(id: id, name: sender.name, url: url,
+                                role: value("role") ?? "mcp", deviceID: value("id") ?? ""))
+        isSearching = services.count < resolving.count
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        resolving.removeAll { $0 === sender }
+        isSearching = services.count < resolving.count
     }
 }

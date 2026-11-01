@@ -17,7 +17,10 @@ struct MCPTool {
 /// A device-local, stateless Streamable HTTP MCP endpoint. No forwarding service.
 @MainActor
 final class MCPServer: ObservableObject {
-    @Published private(set) var status = "Starting MCP…"
+    @Published private(set) var status = "Starting…"
+    @Published private(set) var isReady = false
+    /// The mDNS instance name a client browses for.
+    private(set) var serviceName = ""
     let port: UInt16
     private let configuration: Configuration
     private let role: String
@@ -29,6 +32,7 @@ final class MCPServer: ObservableObject {
     private var retryDelay: Double = 1
     private var retry: Task<Void, Never>?
     private var connections: [UUID: NWConnection] = [:]
+    private var connectionTimeouts: [UUID: Task<Void, Never>] = [:]
 
     init(configuration: Configuration, role: String, port: UInt16, tools: [MCPTool],
          call: @escaping (String, [String: Any]) async throws -> [[String: Any]]) {
@@ -48,16 +52,23 @@ final class MCPServer: ObservableObject {
             for entry in ["path=/mcp", "role=\(role)", "id=\(configuration.deviceID)"] {
                 txt.append(UInt8(entry.utf8.count)); txt.append(contentsOf: entry.utf8)
             }
-            listener.service = NWListener.Service(name: "EWP \(role) \(configuration.deviceID.prefix(8))",
+            serviceName = "EWP \(role) \(configuration.deviceID.prefix(8))"
+            listener.service = NWListener.Service(name: serviceName,
                                                   type: "_mcp._tcp", domain: "local.", txtRecord: txt)
             listener.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
                     guard let self, self.listenerID == generation else { return }
                     switch state {
-                    case .ready: self.status = "MCP ready on port \(self.port)"; self.retryDelay = 1
-                    case .waiting(let error): self.status = "MCP unavailable: \(error.localizedDescription)"
+                    case .ready:
+                        self.status = "MCP ready on port \(self.port)"
+                        self.isReady = true
+                        self.retryDelay = 1
+                    case .waiting(let error):
+                        self.status = "MCP unavailable: \(error.localizedDescription)"
+                        self.isReady = false
                     case .failed(let error):
                         self.status = "MCP unavailable: \(error.localizedDescription)"
+                        self.isReady = false
                         self.listener?.cancel(); self.listener = nil
                         let delay = self.retryDelay; self.retryDelay = min(30, delay * 2)
                         self.retry?.cancel()
@@ -81,8 +92,11 @@ final class MCPServer: ObservableObject {
     func stop() {
         shouldRun = false; listenerID = UUID(); retry?.cancel(); retry = nil
         listener?.cancel(); listener = nil
+        isReady = false
         for connection in connections.values { connection.cancel() }
+        for timeout in connectionTimeouts.values { timeout.cancel() }
         connections.removeAll()
+        connectionTimeouts.removeAll()
     }
 
     private func accept(_ connection: NWConnection) {
@@ -91,9 +105,19 @@ final class MCPServer: ObservableObject {
         connections[id] = connection
         connection.start(queue: .main)
         receive(connection, id: id, buffer: Data())
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            connection.cancel(); self?.connections.removeValue(forKey: id)
+        // Drop a connection that never finishes its request, but cancel the
+        // timer on reply so a slow screen capture is not cut off mid-response.
+        connectionTimeouts[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            connection.cancel()
+            self?.close(id)
         }
+    }
+
+    private func close(_ id: UUID) {
+        connectionTimeouts.removeValue(forKey: id)?.cancel()
+        connections.removeValue(forKey: id)
     }
 
     private func receive(_ connection: NWConnection, id: UUID, buffer: Data) {
@@ -174,7 +198,7 @@ final class MCPServer: ObservableObject {
         packet.append(body)
         connection.send(content: packet, completion: .contentProcessed { [weak self] _ in
             connection.cancel()
-            Task { @MainActor in self?.connections.removeValue(forKey: id) }
+            Task { @MainActor in self?.close(id) }
         })
     }
 

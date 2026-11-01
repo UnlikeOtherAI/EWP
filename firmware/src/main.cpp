@@ -108,6 +108,26 @@ void appendHosts(JsonDocument &doc) {
     item["hid_connected"] = id == selectedId() && getHid() != BLE_HS_CONN_HANDLE_NONE;
   }
 }
+// An agent arrives here knowing only the endpoint. `help` is how it learns
+// what this board is for and which mistakes to avoid, without a human
+// explaining the system first.
+void appendHelp(JsonDocument &doc) {
+  doc["device"] = keyboardName;
+  doc["role"] = "keyboard";
+  doc["summary"] = "A Bluetooth keyboard and mouse. It types and clicks on one paired phone, tablet or computer at a time.";
+  auto steps = doc["getting_started"].to<JsonArray>();
+  steps.add("Call device_status to see Wi-Fi state, saved bonds and which host is selected.");
+  steps.add("Call list_hosts for the bonds this board has saved. Each host_id is stable across reconnections and reboots.");
+  steps.add("To add a target: call start_pairing, then a person pairs 'UnlikeOtherAI Keyboard' in that target's own Bluetooth settings using the returned pairing_code. The board cannot pair on its own.");
+  steps.add("Call select_host to reserve input for one saved host, then poll device_status until hid_connected is true before sending input.");
+  steps.add("Use press_key and move_pointer to type and click.");
+  auto care = doc["important"].to<JsonArray>();
+  care.add("notified:true means this board sent the HID report. It does not prove the target acted on it. Verify on the target's screen.");
+  care.add("Input is refused unless the selected host is connected and subscribed. The board never routes input to a different host as a fallback.");
+  care.add("Pairing is limited to eight bonds. When full, start_pairing fails rather than deleting an existing bond.");
+  doc["seeing_the_screen"] = "This board has no camera or screen access. If the target is an iPhone or iPad running EWP, browse _mcp._tcp.local. for a service whose role TXT record is 'app' on the same device, and use its get_screen tool.";
+  doc["discovery"] = "This endpoint advertises _mcp._tcp.local. with TXT records id, role and path. Credentials are never advertised.";
+}
 void appendStatus(JsonDocument &doc) {
   doc["id"] = deviceId; doc["name"] = keyboardName; doc["firmware"] = "0.2.0";
   doc["selected_host"] = selectedId(); doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
@@ -256,6 +276,7 @@ void addTool(JsonArray tools, const char *name, const char *description, const c
   auto tool = tools.add<JsonObject>(); tool["name"] = name; tool["description"] = description;
   JsonDocument parsed; deserializeJson(parsed, schema); tool["inputSchema"] = parsed.as<JsonObject>();
 }
+void appendHelp(JsonDocument &doc);
 void appendStatus(JsonDocument &doc);
 void appendHosts(JsonDocument &doc);
 bool beginPairing(JsonDocument &out);
@@ -283,6 +304,7 @@ void handleMCP() {
     reply["result"].to<JsonObject>();
   } else if (method == "tools/list") {
     auto tools = reply["result"]["tools"].to<JsonArray>();
+    addTool(tools, "help", "Explain what this device is, how to pair and select a target, and what its results do and do not prove. Call this first.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "device_status", "Read this keyboard's Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "list_hosts", "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "start_pairing", "Disconnect input and advertise as an UnlikeOtherAI keyboard for a new host. Existing bonds stay saved. Pair in the target's Bluetooth settings.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64}},"additionalProperties":false})");
@@ -293,7 +315,8 @@ void handleMCP() {
     String name = request["params"]["name"] | "";
     auto args = request["params"]["arguments"].as<JsonObject>();
     JsonDocument out; bool failed = false;
-    if (name == "device_status") appendStatus(out);
+    if (name == "help") appendHelp(out);
+    else if (name == "device_status") appendStatus(out);
     else if (name == "list_hosts") appendHosts(out);
     else if (name == "start_pairing") {
       pendingHostName = args["name"] | "";
