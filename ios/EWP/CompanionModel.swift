@@ -59,6 +59,7 @@ final class CompanionModel: ObservableObject {
     init() {
         discovery.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         provisioning.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+        remote.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         configure()
     }
 
@@ -106,6 +107,8 @@ final class CompanionModel: ObservableObject {
         server?.start(); discovery.start()
         while !Task.isCancelled {
             await refreshCaptureState()
+            remote.note(discovery.devices)
+            await remote.verify(discovery.devices)
             // Each idle tick is a refused connection to a extension that is not
             // running, so only poll quickly when something is expected to change.
             switch sharing {
@@ -113,6 +116,17 @@ final class CompanionModel: ObservableObject {
             case .live: try? await Task.sleep(for: .seconds(2))
             case .off: try? await Task.sleep(for: .seconds(5))
             }
+        }
+    }
+
+    /// Keeps the device list honest while it is on screen. The home screen's
+    /// loop stops when a screen is pushed over it, so a list that shows which
+    /// devices are answering has to run its own.
+    func watchDevices() async {
+        while !Task.isCancelled {
+            remote.note(discovery.devices)
+            await remote.verify(discovery.devices)
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 

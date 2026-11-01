@@ -109,6 +109,70 @@ opened a window, issued a fresh code and advertised under the board's name.
   name that was already a valid MCP server key and rejected it. The key is now
   derived from the name instead.
 
+## Device identity
+
+Added 1 November 2026, after a question about how a device stays the same
+device across a rename.
+
+Each device owns a stable identifier and publishes it as the `id` key in its
+mDNS TXT record. Everything that refers to a device — the app's list, saved
+access tokens, `wall.json`, the `ewp-fleet` reports — is keyed by that
+identifier and never by a name or an address.
+
+| Device | Identifier | Survives |
+| --- | --- | --- |
+| ESP32 board | its 48-bit MAC, as `ewp-0cb815c55dc4` | a reflash, an NVS erase, a rename, a new network. It cannot collide, and the board needs no stored identifier at all. |
+| iPhone or iPad | a random UUID made on first launch and kept in the keychain | relaunching, renaming, rebooting, changing network, updating the app. It resets when the app is deleted and reinstalled. |
+
+The iOS identifier is deliberately not synchronised through iCloud. Syncing it
+would hand the same identity to every device restored from one backup, which on
+a wall of 200 phones is a worse failure than a device coming back as new. The
+price is that reinstalling the app produces a new identifier, which is why
+saved devices that are not on the network stay listed and removable.
+
+The mDNS instance name is built from the identifier (`EWP app 36c520d9`), not
+from the human name, so renaming a device never creates a second entry
+anywhere. The name travels in the TXT record beside the identifier.
+
+### On a physical board and two app instances, 1 November 2026
+
+| Check | How | Result |
+| --- | --- | --- |
+| The board's identifier is its MAC | `esptool chip_id` over USB against the advertised id | `0c:b8:15:c5:5d:c4` matches `ewp-0cb815c55dc4` |
+| A device that leaves and returns is still one device | hard-reset the board, watch discovery | gone while it rebooted, then back under the same id and the same name, one entry, no duplicate |
+| A name survives losing power | the same reset | NVS kept `Bench 1` |
+| An iOS identifier resets with the app's keychain | deleted the app's two keychain rows, relaunched | new identifier and a new token; the old identity never returns |
+| Adopting another device proves the token first | connected to a mock endpoint from the app | the app called `help` before saving, and the key marker appeared in the list |
+| A device the tools have under an old identifier | `ewp-fleet status` | reports the pairing by name and says which identifier to put in `wall.json`, instead of blaming the network |
+| A saved device that stops answering | stopped a throwaway endpoint with the list open | left the live list and appeared once under "Saved, Not Answering" in about ten seconds, with its last known name and its identifier |
+| The same device answering again | started it again | returned to the live list with its key marker, and the saved section disappeared |
+| Removing a stale entry | tapped Remove | the keychain item went, and the device fell back to being an ordinary discovered device |
+
+### A third fault found by running it, and fixed
+
+**The app kept listing a device that was gone.** Bonjour keeps a service
+record for as long as its time to live, and a device that dies without sending
+a goodbye leaves one behind; restarting the browser only reads the same cache,
+so "Find Devices Again" brought the dead device straight back. The Mac's own
+browser, which starts with an empty cache, had already dropped it. A saved
+device is now counted as present only when it answers: one saved device is
+asked per two-second tick, in turn, so a wall of them is never swept at once.
+A device that stops answering moves to "Saved, Not Answering" within about ten
+seconds and moves back as soon as it answers again, and it is never in both
+lists at once.
+
+Testing that also showed the list was frozen while anyone looked at it: the
+home screen's loop stops when a screen is pushed over it, so the Network screen
+now runs its own while it is on screen.
+
+Both were verified by adopting a throwaway endpoint, stopping it, starting it
+and stopping it again, with the list open throughout, and then removing it.
+
+`~/.config/ewp` on this Mac still holds credentials for the board under both
+its old 8-hex identifier and its current 48-bit one: one device, two sets of
+files, left behind when the identifier format changed. That is the duplicate
+this work is about, and `ewp-fleet status` now names it.
+
 ### Not verified
 
 **No Bluetooth pairing or input was proved.** The chain from `start_pairing`

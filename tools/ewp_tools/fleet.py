@@ -260,11 +260,52 @@ def check(device, wall, live, query):
     return finish('ok', describe(role, status))
 
 
+def reidentified(results, unlisted):
+    """Pairs of (wall entry, live endpoint) that look like one device, not two.
+
+    A device is matched by its identifier, so a device that comes back under a
+    new one — an iOS app reinstalled, a board whose identifier format changed —
+    reads as a missing device plus an unfamiliar device. Pair them by the name
+    the device publishes, and only when the name picks out exactly one of each,
+    so this never silently merges two devices that share a name.
+    """
+    def key(value):
+        return (value or '').strip().lower()
+
+    live = {}
+    for entry in unlisted:
+        if key(entry.get('name')) and entry['device_id']:
+            live.setdefault(key(entry['name']), []).append(entry)
+    missing = {}
+    for item in results:
+        if item['state'] == 'missing':
+            missing.setdefault(key(item['name']), []).append(item)
+    return [(found[0], live[name][0]) for name, found in sorted(missing.items())
+            if len(found) == 1 and len(live.get(name, [])) == 1]
+
+
 def status_report(results, unlisted, seconds):
     """Readable by default; --json stays the machine-facing form."""
     wall = [item for item in results if item['state'] != 'n/a']
     up = sum(item['state'] == 'ok' for item in wall)
+    moved = reidentified(results, unlisted)
     if wall and all(item['state'] == 'missing' for item in wall):
+        # Endpoints answering on the network prove that mDNS works, so blaming
+        # the Wi-Fi would send someone to walk the wall for nothing. The common
+        # cause is an identifier that changed under a device that is right here.
+        if moved:
+            return '\n'.join(['No wall device answered, but each one is on the network under a',
+                              'different identifier:', '']
+                              + [f"  {item['name']}  wall.json has {item['id']}, "
+                                 f"the network has {entry['device_id']}" for item, entry in moved]
+                              + ['', 'Put the new id in wall.json and delete the old token file.'])
+        if unlisted:
+            return '\n'.join(['No wall device answered, but these endpoints did, and none of them',
+                              'is in wall.json:', '']
+                              + [f"  {entry['device_id'] or entry['service']}  "
+                                 f"{KINDS.get(entry['role'], entry['role'])}  {entry['endpoint']}"
+                                 for entry in sorted(unlisted, key=lambda item: (item['role'], item['service']))]
+                              + ['', 'Multicast DNS is working, so check the ids in wall.json.'])
         return ("No wall device answered.\n\n"
                 "Check that this computer is on the same Wi-Fi as the devices, that the\n"
                 "EWP app is open on the phones, and that the network does not block\n"
@@ -280,9 +321,16 @@ def status_report(results, unlisted, seconds):
         lines += ['', 'Needs attention: ' + ', '.join(problems) + '.']
     if any(item['state'] == 'missing' for item in wall):
         lines.append(f'A missing device may only be slow to answer; rerun with --seconds {min(30, seconds * 3)} before walking the wall.')
-    if unlisted:
+    if moved:
+        lines += ['', 'Same name, new identifier. Probably one device, not two:']
+        for item, entry in moved:
+            lines.append(f"  {item['name']}  wall.json has {item['id']}, the network has {entry['device_id']}")
+        lines.append('If it is the same device, put the new id in wall.json and delete the old token file.')
+    paired = {entry['service'] for _, entry in moved}
+    rest = [entry for entry in unlisted if entry['service'] not in paired]
+    if rest:
         lines += ['', 'On the network but not in wall.json:']
-        for entry in sorted(unlisted, key=lambda item: (item['role'], item['service'])):
+        for entry in sorted(rest, key=lambda item: (item['role'], item['service'])):
             lines.append(f"  {entry['device_id'] or entry['service']}  {KINDS.get(entry['role'], entry['role'])}  {entry['endpoint']}")
     return '\n'.join(lines)
 
@@ -297,8 +345,10 @@ def run_status(args):
     unlisted = [entry for entry in entries if entry['device_id'].lower() not in known]
     if args.json:
         up = sum(item['state'] == 'ok' for item in results)
+        moved = [dict(name=item['name'], wall_id=item['id'], network_id=entry['device_id'],
+                      endpoint=entry['endpoint']) for item, entry in reidentified(results, unlisted)]
         print(json.dumps(dict(up=up, expected=sum(item['state'] != 'n/a' for item in results),
-                              devices=results, unlisted=unlisted), indent=2))
+                              devices=results, unlisted=unlisted, reidentified=moved), indent=2))
     else:
         print(status_report(results, unlisted, args.seconds))
     return 0 if all(item['state'] in ('ok', 'n/a') for item in results) else 1

@@ -129,7 +129,7 @@ private struct AboutDeviceView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: saved)
-            Card(caption: "The app endpoint answers MCP requests. The screen endpoint exists only while a broadcast is running.") {
+            Card(caption: "The identifier is created once, on first launch, and kept in the keychain, so it survives renaming, restarting and moving to another network. The app endpoint answers MCP requests; the screen endpoint exists only while a broadcast is running.") {
                 ValueRow(label: "Device ID", value: model.deviceID, monospaced: true)
                 ValueRow(label: "Service", value: model.serviceName)
                 ValueRow(label: "App endpoint",
@@ -178,7 +178,14 @@ private struct AccessView: View {
 private struct NetworkView: View {
     @ObservedObject var model: CompanionModel
 
-    private var devices: [DiscoveredDevice] { model.discovery.others(excluding: model.deviceID) }
+    private var discovered: [DiscoveredDevice] { model.discovery.others(excluding: model.deviceID) }
+    private var absent: [RemoteDevices.Saved] { model.remote.absent(from: discovered) }
+
+    /// A saved device that stopped answering belongs in one list, not both.
+    private var devices: [DiscoveredDevice] {
+        let gone = Set(absent.map(\.id))
+        return discovered.filter { !gone.contains($0.id) }
+    }
 
     var body: some View {
         DetailScreen(title: "Network") {
@@ -236,7 +243,32 @@ private struct NetworkView: View {
                     }
                 }
             }
+            if !absent.isEmpty {
+                Card(header: "Saved, Not Answering",
+                     caption: "Access tokens this device still holds. A device is matched by its identifier, not its name, so renaming one never creates a second entry here \u{2014} but a device whose app was reinstalled comes back with a new identifier, and its old entry stays until you remove it.") {
+                    ForEach(absent) { device in
+                        CardRow(divider: device.id != absent.last?.id) {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(device.title).foregroundStyle(.primary).lineLimit(1)
+                                    Text(device.id)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer(minLength: 8)
+                                Button("Remove", role: .destructive) { model.remote.forget(device.id) }
+                                    .font(.subheadline)
+                                    .accessibilityIdentifier("forget-\(device.id)")
+                            }
+                            .contentShape(Rectangle())
+                        }
+                    }
+                }
+            }
         }
+        .task { await model.watchDevices() }
     }
 }
 

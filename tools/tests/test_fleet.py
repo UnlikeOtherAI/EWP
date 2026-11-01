@@ -403,3 +403,70 @@ class ServerKeyTests(unittest.TestCase):
         self.assertEqual(server_key('Bench 1'), 'Bench-1')
         self.assertEqual(server_key('R4/C2 (spare)'), 'R4-C2-spare')
         self.assertEqual(server_key('!!!'), 'ewp')
+
+
+class ReidentifiedTests(unittest.TestCase):
+    """A device that comes back under a new identifier is one device, not two."""
+
+    @staticmethod
+    def missing(name, device_id):
+        return dict(name=name, id=device_id, role='phone', state='missing',
+                    detail='not found on the network', endpoint=None, status=None)
+
+    @staticmethod
+    def live(name, device_id):
+        return dict(seen(device_id, 'app'), name=name)
+
+    def test_one_missing_and_one_live_of_the_same_name_are_paired(self):
+        results = [self.missing('R4-01', 'phone-1')]
+        unlisted = [self.live('R4-01', 'phone-1-reinstalled')]
+        self.assertEqual(fleet.reidentified(results, unlisted),
+                         [(results[0], unlisted[0])])
+
+    def test_the_name_is_matched_regardless_of_case_and_padding(self):
+        results = [self.missing('  Bench 1', 'old')]
+        unlisted = [self.live('bench 1  ', 'new')]
+        self.assertEqual(len(fleet.reidentified(results, unlisted)), 1)
+
+    def test_a_device_that_is_answering_is_never_paired(self):
+        present = dict(self.missing('R4-01', 'phone-1'), state='ok')
+        self.assertEqual(fleet.reidentified([present], [self.live('R4-01', 'other')]), [])
+
+    def test_two_devices_sharing_a_name_are_left_alone(self):
+        results = [self.missing('R4-01', 'phone-1'), self.missing('R4-01', 'phone-2')]
+        unlisted = [self.live('R4-01', 'new-1')]
+        self.assertEqual(fleet.reidentified(results, unlisted), [])
+        results = [self.missing('R4-01', 'phone-1')]
+        unlisted = [self.live('R4-01', 'new-1'), self.live('R4-01', 'new-2')]
+        self.assertEqual(fleet.reidentified(results, unlisted), [])
+
+    def test_an_unnamed_endpoint_is_not_guessed_at(self):
+        results = [self.missing('R4-01', 'phone-1')]
+        self.assertEqual(fleet.reidentified(results, [self.live('', 'new')]), [])
+        self.assertEqual(fleet.reidentified(results, [seen('new', 'app')]), [])
+
+    def test_the_report_names_both_identifiers_and_does_not_list_it_twice(self):
+        results = [self.missing('R4-01', 'phone-1')]
+        unlisted = [self.live('R4-01', 'phone-1-new')]
+        text = fleet.status_report(results, unlisted, 5)
+        self.assertIn('wall.json has phone-1, the network has phone-1-new', text)
+        self.assertNotIn('On the network but not in wall.json', text)
+
+    def test_a_wall_with_one_device_up_still_reports_the_pairing_once(self):
+        up = dict(self.missing('R4-02', 'phone-2'), state='ok', detail='screen live')
+        results = [up, self.missing('R4-01', 'phone-1')]
+        unlisted = [self.live('R4-01', 'phone-1-new')]
+        text = fleet.status_report(results, unlisted, 5)
+        self.assertIn('Same name, new identifier', text)
+        self.assertIn('wall.json has phone-1, the network has phone-1-new', text)
+        self.assertNotIn('On the network but not in wall.json', text)
+
+    def test_endpoints_answering_rule_out_the_network_advice(self):
+        results = [self.missing('R4-01', 'phone-1')]
+        text = fleet.status_report(results, [self.live('Spare', 'unknown-1')], 5)
+        self.assertIn('Multicast DNS is working', text)
+        self.assertNotIn('same Wi-Fi', text)
+
+    def test_nothing_on_the_network_still_blames_the_network(self):
+        text = fleet.status_report([self.missing('R4-01', 'phone-1')], [], 5)
+        self.assertIn('same Wi-Fi', text)

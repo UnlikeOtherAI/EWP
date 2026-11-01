@@ -48,8 +48,17 @@ final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceDel
     /// Endpoints folded into the devices that host them, named devices first.
     var devices: [DiscoveredDevice] {
         Dictionary(grouping: services.filter { !$0.deviceID.isEmpty }, by: \.deviceID)
-            .map { DiscoveredDevice(id: $0.key, endpoints: $0.value.sorted { $0.role < $1.role }) }
+            .map { DiscoveredDevice(id: $0.key, endpoints: Self.newestPerRole($0.value)) }
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    /// One endpoint per role. An advertisement that has been withdrawn but not
+    /// yet dropped by Bonjour would otherwise sit beside the live one, and
+    /// `primary` could pick the dead endpoint, so the newest resolution wins.
+    private static func newestPerRole(_ endpoints: [Service]) -> [Service] {
+        var newest: [String: Service] = [:]
+        for endpoint in endpoints { newest[endpoint.role] = endpoint }
+        return newest.values.sorted { $0.role < $1.role }
     }
 
     /// Everything except this device, which has its own screen in the app.

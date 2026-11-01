@@ -114,6 +114,14 @@ A successful Bluetooth notification does not prove that the target acted on inpu
 
 Local HTTP is intended for a trusted LAN. Do not expose these ports to the internet. MCP credentials and screen frames must not be logged or committed.
 
+## How a device is identified
+
+Every device has one identifier and publishes it as `id` in its mDNS TXT record. A board's is its 48-bit MAC (`ewp-0cb815c55dc4`), so it survives a reflash and cannot collide. A phone or tablet makes a random UUID the first time the app runs and keeps it in the keychain, so it survives renaming, rebooting and changing network; it resets if the app is deleted and reinstalled. It is deliberately not synchronised through iCloud, because every device restored from one backup would then claim the same identity.
+
+The mDNS instance name is built from the identifier, not from the human name, so renaming a device never produces a second entry anywhere. Names live on the device that owns them, so every client sees the same one.
+
+Because Bonjour keeps advertising a device after it has gone, a device the app holds a token for counts as present only when it answers. One is asked per tick, in turn. A device that stops answering moves to Advanced → Network → Saved, Not Answering, where it can be removed; it comes back by itself when it answers again.
+
 ## Choosing devices for a session
 
 A client that loads every endpoint of a large wall holds hundreds of tool schemas, and nothing in an endpoint says where on the wall it is. `ewp-fleet` is setup-time tooling for that. It reads mDNS and a file you keep, prints a report or writes a file, and exits. It carries no MCP traffic and nothing keeps running.
@@ -128,14 +136,14 @@ Describe the wall in `~/.config/ewp/wall.json`, or pass `--wall`. The file holds
 ]}
 ```
 
-`id` is the `device_id` that `ewp-discover --json` shows. `name` is 1-32 letters, digits, `-` or `_`; it becomes the MCP server name, so it prefixes every tool. `role` is `phone`, `tablet`, `computer` or `controller`. A `computer` runs no EWP endpoint and is only reached through its `controller`, which is the id or name of the board that types on the device. `token_file` defaults to `~/.config/ewp/<id>.token`, where `ewp-setup` leaves a board's token; save a phone's token there yourself from the app's Advanced → Access, with mode `600`. `address_hint` is a hostname tried only when mDNS does not show the device.
+`id` is the `device_id` that `ewp-discover --json` shows. `name` is 1-32 printable characters, so `Row 4 Seat 2` is fine; the MCP server name is derived from it, which is what prefixes every tool. `role` is `phone`, `tablet`, `computer` or `controller`. A `computer` runs no EWP endpoint and is only reached through its `controller`, which is the id or name of the board that types on the device. `token_file` defaults to `~/.config/ewp/<id>.token`, where `ewp-setup` leaves a board's token; save a phone's token there yourself from the app's Advanced → Access, with mode `600`. `address_hint` is a hostname tried only when mDNS does not show the device.
 
 ```sh
 uv run --project tools ewp-fleet status
 uv run --project tools ewp-fleet compose --group row4 --out ~/sessions/row4.mcp.json
 ```
 
-`status` listens for mDNS, asks each device that answers for its status, and prints one line per device: `ok`, `degraded` (found but not usable: the app is up and screen sharing is not, the token is rejected, two devices share an id), `missing`, or `n/a` for a computer. A phone is `ok` when its screen endpoint reports live frames. Endpoints on the network that are not in `wall.json` are listed after the wall. It exits non-zero unless every device is `ok`; `--json` gives the same result for a script. Uptime, reset reason and signal strength are shown once the firmware reports them.
+`status` listens for mDNS, asks each device that answers for its status, and prints one line per device: `ok`, `degraded` (found but not usable: the app is up and screen sharing is not, the token is rejected, two devices share an id), `missing`, or `n/a` for a computer. A phone is `ok` when its screen endpoint reports live frames. Endpoints on the network that are not in `wall.json` are listed after the wall, and a device that is missing while an endpoint of the same name answers under a different id is reported as one device with a new identifier, not two devices. It exits non-zero unless every device is `ok`; `--json` gives the same result for a script. Uptime, reset reason and signal strength are shown once the firmware reports them.
 
 `compose` writes an MCP client configuration for the part of the wall one session needs. Choose with `--group` (a tag from `group`, or `row4` and `col2` from positions), `--device`, `--controller` (that controller and every device it serves) or `--all`; repeat the flags to combine. Whatever you choose brings the controller that types on it. A phone is represented by its screen endpoint and a controller by its keyboard endpoint, each as a server named after the device, so the client sees `mcp__R4-01__get_screen`. Endpoint URLs use the live mDNS hostname, falling back to `address_hint`. If a chosen device cannot be found nothing is written, unless you pass `--skip-missing`; an existing `--out` file is replaced only with `--force`.
 
