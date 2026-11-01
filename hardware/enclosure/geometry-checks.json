@@ -17,13 +17,28 @@
     -22.7,
     -5.4
   ],
+  "height_stack_mm": {
+    "bottom_skin": 1.2,
+    "pin_tip_clearance": 0.3,
+    "exposed_pin_length_assumed": 6.0,
+    "header_spacer_height_assumed": 2.5,
+    "pin_tip_z": 1.5,
+    "header_bottom_z": 7.5,
+    "pcb_underside_z": 10.0,
+    "pcb_thickness_assumed": 1.6,
+    "pcb_top_z": 11.6,
+    "usb_axis_above_pcb_assumed": 1.35,
+    "usb_axis_z": 12.95,
+    "usb_opening_bottom_z": 8.75,
+    "usb_opening_top_z": 17.15
+  },
   "physical_fit_verified": false,
   "parts": [
     {
       "name": "EWP Base - PRINT",
       "non_manifold_edges": 0,
       "connected_components": 1,
-      "volume_mm3": 13921.614,
+      "volume_mm3": 13906.966,
       "dimensions_mm": [
         66.8,
         42.8,
@@ -34,7 +49,7 @@
       "name": "EWP Lid - PRINT",
       "non_manifold_edges": 0,
       "connected_components": 1,
-      "volume_mm3": 9527.14,
+      "volume_mm3": 9553.83,
       "dimensions_mm": [
         66.7,
         42.7,
