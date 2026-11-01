@@ -21,6 +21,19 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install xcodegen
-      - run: xcodegen generate --spec ios/project.yml
-      - run: xcodebuild -project ios/EWP.xcodeproj -scheme EWP -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+        with:
+          fetch-depth: 0
+      - id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "${BASE_SHA//0/}" ] || ! git diff --quiet "$BASE_SHA" HEAD -- ios; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changes.outputs.ios == 'true'
+        run: brew install xcodegen
+      - if: steps.changes.outputs.ios == 'true'
+        run: xcodegen generate --spec ios/project.yml
+      - if: steps.changes.outputs.ios == 'true'
+        run: xcodebuild -project ios/EWP.xcodeproj -scheme EWP -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
