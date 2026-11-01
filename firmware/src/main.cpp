@@ -24,15 +24,17 @@ static uint8_t reportMap[] = {
 constexpr char SERVICE[] = "e7a00001-7c3d-4d21-a19a-455750000001";
 constexpr char CONFIG[] = "e7a00002-7c3d-4d21-a19a-455750000001";
 constexpr char STATUS_UUID[] = "e7a00003-7c3d-4d21-a19a-455750000001";
+constexpr char FIRMWARE[] = "0.3.0";
 struct Configuration { char ssid[33]; char password[65]; };
 QueueHandle_t configurationQueue;
 Preferences preferences;
 WebServer http(80);
 NimBLECharacteristic *keyboard, *mouse, *statusCharacteristic;
 String deviceId, token, setupStatus = "ready";
-String keyboardName;
+String keyboardName, deviceName;
 char selectedHost[32] = {};
 volatile uint32_t pairingUntil = 0;
+volatile uint32_t identifyUntil = 0;
 volatile bool advertisingNeeded = false;
 char pairingExcluded[8][32] = {};
 String pendingHostName;
@@ -72,6 +74,22 @@ void reserveHost(const String &id) {
   hidHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
 }
 bool pairingOpen() { return static_cast<int32_t>(pairingUntil - millis()) > 0; }
+bool identifyOpen() { return static_cast<int32_t>(identifyUntil - millis()) > 0; }
+String displayName() { return deviceName.isEmpty() ? deviceId : deviceName; }
+// Both the operator and the agent need to tell sibling boards apart, and the
+// scan response carries 29 bytes of name, so the product prefix stays short
+// enough to leave room for whatever the operator calls this board.
+String advertisedName() {
+  String tail = deviceName.isEmpty() ? deviceId.substring(deviceId.length() - 6) : deviceName;
+  return (identifyOpen() ? "IDENTIFY " : "EWP ") + tail;
+}
+void applyAdvertisedName() {
+  keyboardName = advertisedName();
+  NimBLEDevice::setDeviceName(keyboardName.c_str());
+  NimBLEAdvertisementData scanResponse; scanResponse.setName(keyboardName.c_str());
+  NimBLEDevice::getAdvertising()->setScanResponseData(scanResponse);
+  advertisingNeeded = true;
+}
 bool permittedHost(NimBLEConnInfo &info) {
   String id = hostId(info.getIdAddress());
   if (!pairingOpen()) return selectedId() == id;
@@ -113,23 +131,27 @@ void appendHosts(JsonDocument &doc) {
 // explaining the system first.
 void appendHelp(JsonDocument &doc) {
   doc["device"] = keyboardName;
+  doc["id"] = deviceId;
+  doc["name"] = deviceName;
+  doc["firmware"] = FIRMWARE;
   doc["role"] = "keyboard";
   doc["summary"] = "A Bluetooth keyboard and mouse. It types and clicks on one paired phone, tablet or computer at a time.";
   auto steps = doc["getting_started"].to<JsonArray>();
   steps.add("Call device_status to see Wi-Fi state, saved bonds and which host is selected.");
   steps.add("Call list_hosts for the bonds this board has saved. Each host_id is stable across reconnections and reboots.");
-  steps.add("To add a target: call start_pairing, then a person pairs 'UnlikeOtherAI Keyboard' in that target's own Bluetooth settings using the returned pairing_code. The board cannot pair on its own.");
+  steps.add("To add a target: call start_pairing, then a person pairs the Bluetooth name it returns in that target's own Bluetooth settings using the returned pairing_code. The board cannot pair on its own.");
   steps.add("Call select_host to reserve input for one saved host, then poll device_status until hid_connected is true before sending input.");
   steps.add("Use press_key and move_pointer to type and click.");
+  steps.add("Call set_name to label this board, and identify when a person needs to find it among boards that look alike.");
   auto care = doc["important"].to<JsonArray>();
   care.add("notified:true means this board sent the HID report. It does not prove the target acted on it. Verify on the target's screen.");
   care.add("Input is refused unless the selected host is connected and subscribed. The board never routes input to a different host as a fallback.");
   care.add("Pairing is limited to eight bonds. When full, start_pairing fails rather than deleting an existing bond.");
   doc["seeing_the_screen"] = "This board has no camera or screen access. If the target is an iPhone or iPad running EWP, browse _mcp._tcp.local. for a service whose role TXT record is 'app' on the same device, and use its get_screen tool.";
-  doc["discovery"] = "This endpoint advertises _mcp._tcp.local. with TXT records id, role and path. Credentials are never advertised.";
+  doc["discovery"] = "This endpoint advertises _mcp._tcp.local. with TXT records id, name, role, path and fw. The name record falls back to the id until set_name is called. Credentials are never advertised.";
 }
 void appendStatus(JsonDocument &doc) {
-  doc["id"] = deviceId; doc["name"] = keyboardName; doc["firmware"] = "0.2.0";
+  doc["id"] = deviceId; doc["name"] = deviceName; doc["bluetooth_name"] = keyboardName; doc["firmware"] = FIRMWARE;
   doc["selected_host"] = selectedId(); doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
   doc["pairing_open"] = pairingOpen(); doc["saved_hosts"] = NimBLEDevice::getNumBonds();
   doc["host_switching"] = true;
@@ -164,6 +186,36 @@ bool chooseHost(const String &id, JsonDocument &out) {
   for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
   advertisingNeeded = true;
   out["selected_host"] = id; out["connected"] = false; out["state"] = "waiting_for_selected_host";
+  return true;
+}
+bool persistName(const String &value, JsonDocument &out) {
+  if (value.length() > 32) { out["error"] = "Name is limited to 32 bytes"; return false; }
+  for (size_t i=0; i<value.length(); ++i) {
+    if (value[i] < 0x20 || value[i] > 0x7e) { out["error"] = "Name must be printable ASCII"; return false; }
+  }
+  deviceName = value; preferences.putString("name", value);
+  applyAdvertisedName();
+  if (mdnsStarted) { MDNS.end(); mdnsStarted = false; } // Re-registered with the new TXT record by loop().
+  out["id"] = deviceId; out["name"] = deviceName; out["bluetooth_name"] = keyboardName;
+  return true;
+}
+bool beginIdentify(int seconds, JsonDocument &out) {
+  if (seconds < 1 || seconds > 30) { out["error"] = "seconds must be between 1 and 30"; return false; }
+  identifyUntil = millis() + static_cast<uint32_t>(seconds) * 1000;
+  applyAdvertisedName();
+  uint16_t target = getHid();
+  bool woke = false;
+  if (target != BLE_HS_CONN_HANDLE_NONE) {
+    // A modifier-only report wakes the screen of the host this board drives
+    // without typing anything into it, which is what shows the operator the
+    // controller-to-phone binding.
+    uint8_t report[8] = {0x01, 0,0,0,0,0,0,0};
+    woke = keyboard->notify(report, sizeof(report), target); delay(20);
+    memset(report, 0, sizeof(report));
+    woke = keyboard->notify(report, sizeof(report), target) && woke;
+  }
+  out["identifying_seconds"] = seconds; out["bluetooth_name"] = keyboardName; out["host_notified"] = woke;
+  out["note"] = "This board has no user LED. It advertises under the Bluetooth name above for the duration, and woke the screen of the host it drives with a modifier-only key.";
   return true;
 }
 void acceptSubscribedHost(NimBLEConnInfo &info) {
@@ -272,7 +324,7 @@ void toolText(JsonDocument &reply, JsonDocument &data, bool failed = false) {
   auto item = result["content"].to<JsonArray>().add<JsonObject>();
   item["type"] = "text"; String text; serializeJson(data, text); item["text"] = text;
 }
-void addTool(JsonArray tools, const char *name, const char *description, const char *schema) {
+void addTool(JsonArray tools, const char *name, const String &description, const char *schema) {
   auto tool = tools.add<JsonObject>(); tool["name"] = name; tool["description"] = description;
   JsonDocument parsed; deserializeJson(parsed, schema); tool["inputSchema"] = parsed.as<JsonObject>();
 }
@@ -299,18 +351,24 @@ void handleMCP() {
   if (method == "initialize") {
     auto result = reply["result"].to<JsonObject>(); result["protocolVersion"] = "2025-03-26";
     result["capabilities"]["tools"].to<JsonObject>();
-    result["serverInfo"]["name"] = "EWP ESP32"; result["serverInfo"]["version"] = "0.2.0";
+    result["serverInfo"]["name"] = "EWP keyboard " + displayName(); result["serverInfo"]["version"] = FIRMWARE;
   } else if (method == "ping") {
     reply["result"].to<JsonObject>();
   } else if (method == "tools/list") {
     auto tools = reply["result"]["tools"].to<JsonArray>();
-    addTool(tools, "help", "Explain what this device is, how to pair and select a target, and what its results do and do not prove. Call this first.", R"({"type":"object","properties":{},"additionalProperties":false})");
-    addTool(tools, "device_status", "Read this keyboard's Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
-    addTool(tools, "list_hosts", "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
-    addTool(tools, "start_pairing", "Disconnect input and advertise as an UnlikeOtherAI keyboard for a new host. Existing bonds stay saved. Pair in the target's Bluetooth settings.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64}},"additionalProperties":false})");
-    addTool(tools, "select_host", "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
-    addTool(tools, "press_key", "Press and release one HID keyboard usage on the selected host. Enter=40, Tab=43, Escape=41, Space=44; left GUI modifier=8. Check the target screen to verify its action.", R"({"type":"object","properties":{"usage":{"type":"integer","minimum":4,"maximum":101},"modifiers":{"type":"integer","minimum":0,"maximum":255,"default":0}},"required":["usage"],"additionalProperties":false})");
-    addTool(tools, "move_pointer", "Relative mouse movement, wheel scrolling or a left click on the selected host. iPhone pointer control requires AssistiveTouch.", R"({"type":"object","properties":{"dx":{"type":"integer","minimum":-127,"maximum":127,"default":0},"dy":{"type":"integer","minimum":-127,"maximum":127,"default":0},"wheel":{"type":"integer","minimum":-127,"maximum":127,"default":0},"click":{"type":"boolean","default":false}},"additionalProperties":false})");
+    // Several MCP clients show the model only tool descriptions, so each one
+    // names the board it drives; five controllers in one client are otherwise
+    // five identical press_key tools.
+    String prefix = "[" + displayName() + "] ";
+    addTool(tools, "help", prefix + "Explain what this device is, how to pair and select a target, and what its results do and do not prove. Call this first.", R"({"type":"object","properties":{},"additionalProperties":false})");
+    addTool(tools, "device_status", prefix + "Read this keyboard's name, Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
+    addTool(tools, "list_hosts", prefix + "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
+    addTool(tools, "start_pairing", prefix + "Disconnect input and advertise for a new host. Existing bonds stay saved. Pair the returned Bluetooth name in the target's own Bluetooth settings.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64}},"additionalProperties":false})");
+    addTool(tools, "select_host", prefix + "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
+    addTool(tools, "set_name", prefix + "Name this board for people and agents. The name persists, appears in the Bluetooth name, the mDNS TXT records and every tool description.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":32}},"required":["name"],"additionalProperties":false})");
+    addTool(tools, "identify", prefix + "Make this board announce itself: it advertises as IDENTIFY <name> and wakes the screen of the host it drives.", R"({"type":"object","properties":{"seconds":{"type":"integer","minimum":1,"maximum":30,"default":10}},"additionalProperties":false})");
+    addTool(tools, "press_key", prefix + "Press and release one HID keyboard usage on the host you selected. Enter=40, Tab=43, Escape=41, Space=44; left GUI modifier=8. Check the target screen to verify its action.", R"({"type":"object","properties":{"usage":{"type":"integer","minimum":4,"maximum":101},"modifiers":{"type":"integer","minimum":0,"maximum":255,"default":0}},"required":["usage"],"additionalProperties":false})");
+    addTool(tools, "move_pointer", prefix + "Relative mouse movement, wheel scrolling or a left click on the host you selected. iPhone pointer control requires AssistiveTouch.", R"({"type":"object","properties":{"dx":{"type":"integer","minimum":-127,"maximum":127,"default":0},"dy":{"type":"integer","minimum":-127,"maximum":127,"default":0},"wheel":{"type":"integer","minimum":-127,"maximum":127,"default":0},"click":{"type":"boolean","default":false}},"additionalProperties":false})");
   } else if (method == "tools/call") {
     String name = request["params"]["name"] | "";
     auto args = request["params"]["arguments"].as<JsonObject>();
@@ -334,7 +392,16 @@ void handleMCP() {
           String value; serializeJson(names, value); preferences.putString("hostnames", value);
         }
       }
-    } else if (name == "press_key" || name == "move_pointer") {
+    }
+    else if (name == "set_name") {
+      if (!args["name"].is<String>()) { out["error"] = "name is required"; failed = true; }
+      else failed = !persistName(args["name"].as<String>(), out);
+    }
+    else if (name == "identify") {
+      if (!args["seconds"].isNull() && !args["seconds"].is<int>()) { out["error"] = "seconds must be an integer"; failed = true; }
+      else failed = !beginIdentify(args["seconds"] | 10, out);
+    }
+    else if (name == "press_key" || name == "move_pointer") {
       uint16_t target = getHid();
       if (target == BLE_HS_CONN_HANDLE_NONE) { out["error"] = "Selected host is not connected and subscribed"; failed = true; }
       else if (name == "press_key") {
@@ -376,7 +443,12 @@ void setupHttp() {
 void setup() {
   Serial.begin(115200);
   preferences.begin("ewp", false);
-  deviceId = "ewp-" + String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX);
+  // getEfuseMac() copies the six address bytes into a uint64_t in memory order,
+  // so the OUI sits in the low bytes here, not the high ones.
+  uint64_t mac = ESP.getEfuseMac(); char digits[13] = {};
+  for (int i=0; i<6; ++i) snprintf(digits + i*2, 3, "%02x", static_cast<uint8_t>(mac >> (8*i)));
+  deviceId = String("ewp-") + digits;
+  deviceName = preferences.getString("name", "");
   passkey = preferences.getUInt("passkey", 0);
   if (!passkey) { passkey = 100000 + esp_random() % 900000; preferences.putUInt("passkey", passkey); }
   // Pairing code is physical setup data; never print Wi-Fi credentials or bridge tokens.
@@ -395,7 +467,7 @@ void setup() {
   }
   String ssid = preferences.isKey("ssid") ? preferences.getString("ssid") : "";
   if (!ssid.isEmpty()) WiFi.begin(ssid.c_str(), preferences.getString("password", "").c_str());
-  keyboardName = "UnlikeOtherAI Keyboard " + deviceId.substring(deviceId.length() - 6);
+  keyboardName = advertisedName();
   NimBLEDevice::init(keyboardName.c_str());
   if (NimBLEDevice::getNumBonds() < 8 && (NimBLEDevice::getNumBonds() == 0 || selectedId().isEmpty())) pairingUntil = millis() + 300000;
   NimBLEDevice::setSecurityAuth(true, true, true);
@@ -419,7 +491,7 @@ void setup() {
   auto advertising = NimBLEDevice::getAdvertising();
   advertising->setAppearance(0x03C1);
   advertising->addServiceUUID(SERVICE); advertising->addServiceUUID(NimBLEUUID((uint16_t)0x1812)); advertising->enableScanResponse(true);
-  NimBLEAdvertisementData scanResponse; scanResponse.setName(keyboardName.c_str()); advertising->setScanResponseData(scanResponse);
+  applyAdvertisedName();
   advertisingNeeded = !restartAdvertising();
   setupHttp();
 }
@@ -434,7 +506,11 @@ void serialSetup() {
     JsonDocument request, reply;
     if (!deserializeJson(request, line)) {
       String method = request["method"] | "";
-      if (method == "access") { reply["id"] = deviceId; reply["token"] = token; reply["pairing_code"] = passkey; }
+      if (method == "access") { reply["id"] = deviceId; reply["token"] = token; reply["pairing_code"] = passkey; reply["name"] = deviceName; }
+      else if (method == "set_name") {
+        if (!request["name"].is<String>()) reply["error"] = "A name string is required";
+        else persistName(request["name"].as<String>(), reply);
+      }
       else if (method == "setup_wifi") {
         String ssid = request["ssid"] | "", password = request["password"] | "";
         if (ssid.length() > 0 && ssid.length() <= 32 && password.length() <= 64) {
@@ -462,6 +538,9 @@ void loop() {
   static bool wasPairing = false;
   bool open = pairingOpen();
   if (wasPairing != open) { advertisingNeeded = true; wasPairing = open; }
+  static bool wasIdentifying = false;
+  bool identifying = identifyOpen();
+  if (wasIdentifying != identifying) { wasIdentifying = identifying; applyAdvertisedName(); }
   static uint32_t nextAdvertisingAttempt = 0;
   if (advertisingNeeded && static_cast<int32_t>(millis()-nextAdvertisingAttempt) >= 0) {
     advertisingNeeded = !restartAdvertising(); nextAdvertisingAttempt = millis()+1000;
@@ -476,7 +555,11 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && !mdnsStarted && static_cast<int32_t>(millis()-nextMdnsAttempt) >= 0) {
     nextMdnsAttempt = millis()+2000;
     mdnsStarted = MDNS.begin(deviceId.c_str());
-    if (mdnsStarted) { MDNS.addService("mcp", "tcp", 80); MDNS.addServiceTxt("mcp", "tcp", "id", deviceId); MDNS.addServiceTxt("mcp", "tcp", "path", "/mcp"); MDNS.addServiceTxt("mcp", "tcp", "role", "keyboard"); }
+    if (mdnsStarted) {
+      MDNS.addService("mcp", "tcp", 80); MDNS.addServiceTxt("mcp", "tcp", "id", deviceId);
+      MDNS.addServiceTxt("mcp", "tcp", "path", "/mcp"); MDNS.addServiceTxt("mcp", "tcp", "role", "keyboard");
+      MDNS.addServiceTxt("mcp", "tcp", "name", displayName()); MDNS.addServiceTxt("mcp", "tcp", "fw", FIRMWARE);
+    }
     if (mdnsStarted) Serial.printf("Wi-Fi connected, address: %s\n", WiFi.localIP().toString().c_str());
   }
   if (WiFi.status() != WL_CONNECTED && mdnsStarted) { MDNS.end(); mdnsStarted = false; }
