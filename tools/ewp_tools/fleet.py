@@ -22,7 +22,17 @@ ENDPOINT = {'phone': 'screen', 'tablet': 'screen', 'controller': 'keyboard'}
 PORTS = {'keyboard': 80, 'screen': 7802}
 STATUS_TOOL = {'keyboard': 'device_status', 'screen': 'get_status'}
 FIELDS = {'id', 'name', 'role', 'row', 'col', 'group', 'controller', 'token_file', 'address_hint'}
-NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}')  # Becomes the MCP server key, so it prefixes every tool name.
+# A board accepts any printable ASCII name, so people really do call one
+# "Row 4 Seat 2". MCP server keys are narrower, so the key is derived from the
+# name rather than the name being restricted to what a key allows.
+NAME = re.compile(r'[\x20-\x7e]{1,32}')
+KEY_UNSAFE = re.compile(r'[^A-Za-z0-9_-]+')
+
+
+def server_key(name):
+    """The MCP server key a device's tools are prefixed with."""
+    key = KEY_UNSAFE.sub('-', name).strip('-')
+    return key or 'ewp'
 TAG = re.compile(r'[A-Za-z0-9_-]+')
 ID = re.compile(r'[A-Za-z0-9._-]{1,64}')
 HOST = re.compile(r'[A-Za-z0-9.-]+')
@@ -67,7 +77,7 @@ def parse_device(entry):
     if unknown:
         bad('unknown field ' + ', '.join(unknown))
     if not isinstance(name, str) or not NAME.fullmatch(name):
-        bad('name must be 1-32 letters, digits, - or _; it becomes the tool prefix')
+        bad('name must be 1 to 32 printable ASCII characters')
     device_id = entry.get('id')
     if not isinstance(device_id, str) or not ID.fullmatch(device_id):
         bad('id must be the device id from its mDNS record or ewp-setup output')
@@ -349,7 +359,7 @@ def run_compose(args):
         if url is None:
             left_out.append(device.name)
         else:
-            servers[device.name] = (device, url)
+            servers[server_key(device.name)] = (device, url)
     if left_out and not args.skip_missing:
         print('Not found on the network, and no address_hint: ' + ', '.join(left_out) + '.\n'
               'Nothing was written. Fix those devices, or pass --skip-missing to compose without them.', file=sys.stderr)

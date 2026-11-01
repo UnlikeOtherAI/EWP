@@ -81,7 +81,7 @@ class LoadWallTests(WallCase):
         mistakes = {
             "tokens never go in wall.json": {"token": "abc"},
             "unknown field colour": {"colour": "red"},
-            "name must be": {"name": "R4 01"},
+            "name must be": {"name": "x" * 33},
             "role must be": {"role": "toaster"},
             "bare hostname": {"address_hint": "http://phone.local"},
             "row must be a whole number": {"row": "four"},
@@ -394,3 +394,12 @@ class ComposeTests(WallCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServerKeyTests(unittest.TestCase):
+    def test_a_human_name_becomes_a_usable_server_key(self):
+        from ewp_tools.fleet import server_key
+        self.assertEqual(server_key('Row 4 Seat 2'), 'Row-4-Seat-2')
+        self.assertEqual(server_key('Bench 1'), 'Bench-1')
+        self.assertEqual(server_key('R4/C2 (spare)'), 'R4-C2-spare')
+        self.assertEqual(server_key('!!!'), 'ewp')

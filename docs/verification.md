@@ -68,26 +68,66 @@ missing Bluetooth at step one and leaves the remaining steps pending.
 Added after an architecture review of the 200-device wall. The review is in
 [architecture-review.md](architecture-review.md).
 
-| Check | Host / source | Result |
-| --- | --- | --- |
-| ESP32 firmware compilation | Mac, PlatformIO 6.1.18 | Passed after merge. 1,137,289 bytes flash (86.8%), 59,764 bytes RAM (18.2%). |
-| iOS build | Mac, Xcode 27.1 | Passed. |
-| Tool tests | macOS | 43 passed, 2 skipped as Windows-only. |
-| Device naming end to end | iPhone 16 Pro Max simulator and macOS Bonjour | Passed. A name entered in the app persisted, re-advertised, and appeared in `ewp-discover` in place of the identifier. |
-| Device list grouping | iPhone simulator, live network | Passed. A physical iPad advertising app and screen endpoints appeared as one device; this device was excluded. |
+### On a physical board, 1 November 2026
 
-**Nothing in this round was run on an ESP32.** The firmware changes — full
-48-bit device ids, per-pairing passkeys, host-bound input, `forget_host`,
-`set_name`, `identify`, the CCCD store size and the pairing-starvation fix —
-are compile-verified only. The bond-overflow fault they address was found by
-reading NimBLE's default store callback, not by reproducing it on hardware.
-Flashing a board and re-running the Bluetooth acceptance checks is still
-outstanding, and the earlier Bluetooth result above has not been re-attempted.
+Firmware 0.3.0 was built and flashed to the ESP32-D0WDQ6 development board
+over USB. The board kept its NVS, so its token, Wi-Fi credentials and setup
+code carried over; its id changed from the old 8-hex form to the full 48-bit
+`ewp-0cb815c55dc4`, and it rejoined Wi-Fi at the same address. The state it
+was replaced from is recorded in the run log; it had no bonds, so nothing
+pairable was lost, and 0.2.0 can be restored by building `bf56edb`.
 
-Renaming a board from the app needs that board's access token, which the app
-cannot obtain over Bluetooth yet; the review's P3 covers that handoff.
+A 29-check acceptance suite was run against that board over its own MCP
+endpoint. All 29 passed:
 
-The `help` tool was added to all three endpoints but has not been exercised
-against a physical board or a real MCP client. Keyboard delivery, automatic
-reconnection, persistence across reboot and pointer delivery remain as
-described above and are not affected by this change.
+| Area | What was checked |
+| --- | --- |
+| Protocol | `initialize` names the board and reports 0.3.0; all eleven tools advertised; every description carries the board's name |
+| Identity | id carries the full 48-bit MAC; `host_capacity` 8; `store_full` false; Wi-Fi up; `help` states what `notified` does not prove |
+| Naming | `set_name` persists and changes the Bluetooth name and every tool description; over-long and non-ASCII names refused |
+| Idempotency | a repeated `request_id` replays the first result and does not rename the board a second time |
+| Host binding | `press_key` and `move_pointer` refused with no `host_id`, and refused for a host that is not the selected one |
+| Bonds | no bonds saved; `forget_host` refuses a wrong `confirm` and an unknown host |
+| Identify | runs, advertises as `IDENTIFY <name>`, and bounds its duration |
+| Authentication | no token, a wrong token and a browser `Origin` are each rejected with 401 |
+
+Also exercised on that board: `ewp-setup --name` over USB named it and saved
+its credentials under the new id; `ewp-fleet status` reported it `ok` and
+flagged a device on the network that was not in `wall.json`; `start_pairing`
+opened a window, issued a fresh code and advertised under the board's name.
+
+### Two faults found by running it, and fixed
+
+- **Renaming a board took it off the network.** `set_name` ended the mDNS
+  responder and let the loop restart it; on ESP32 that leaves the service
+  advertised but unresolvable, so the board kept answering on its IP while
+  disappearing from discovery until a power cycle. Setting the TXT item again
+  in place fixes it. Verified by renaming the board and finding it still
+  listed, under its new name, without a reboot.
+- **`ewp-fleet` refused names the board accepts.** The board takes any
+  printable ASCII name, so "Row 4 Seat 2" is legal, but the tool required a
+  name that was already a valid MCP server key and rejected it. The key is now
+  derived from the name instead.
+
+### Not verified
+
+**No Bluetooth pairing or input was proved.** The chain from `start_pairing`
+through a bonded host to a keystroke landing on a screen is still unverified,
+exactly as it was before this round. Reaching it needs a target device to pair
+with, and none was available: both physical iOS devices were locked, which
+this product does not and should not work around, and permission to drive this
+Mac's Bluetooth settings was declined. The board's side — opening the window,
+issuing a per-window code, advertising under its name — is confirmed; what
+happens after a host accepts the code is not.
+
+The earlier Bluetooth failure (`authentication_state: -1`, disconnect reason
+520) was reproduced on the old firmware before flashing, and its cause is
+understood: the board displays a passkey that only reaches a serial console,
+so a person pairing from a phone has no way to read it. `start_pairing`
+returns the code over MCP, so an agent-driven pairing has one; a person using
+the app's Bluetooth setup flow still does not. The review's P3 covers that
+handoff and it is not implemented.
+
+Also unverified: mDNS recovery after a Wi-Fi drop uses the same end-and-begin
+pattern that was just fixed for renames, and was not exercised. `identify`
+has no LED on this board. Nothing has been tested with more than one board.
