@@ -221,7 +221,10 @@ bool persistName(const String &value, JsonDocument &out) {
   }
   deviceName = value; preferences.putString("name", value);
   applyAdvertisedName();
-  if (mdnsStarted) { MDNS.end(); mdnsStarted = false; } // Re-registered with the new TXT record by loop().
+  // Setting the TXT item again replaces it. Ending and restarting the
+  // responder instead leaves the service advertised but unresolvable until
+  // the board reboots, which takes a renamed board off the network.
+  if (mdnsStarted) MDNS.addServiceTxt("mcp", "tcp", "name", displayName());
   out["id"] = deviceId; out["name"] = deviceName; out["bluetooth_name"] = keyboardName;
   return true;
 }
