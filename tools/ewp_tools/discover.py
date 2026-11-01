@@ -42,11 +42,39 @@ def discover(seconds=5):
             browser.cancel()
 
 
+ROLES = {'app': 'iPhone or iPad', 'screen': 'live screen', 'keyboard': 'keyboard'}
+
+
+def report(entries):
+    """Readable by default; --json stays the machine-facing form."""
+    if not entries:
+        return ("No EWP endpoints answered.\n\n"
+                "Check that this computer is on the same Wi-Fi as the devices, that the\n"
+                "EWP app is open on at least one of them, and that the network does not\n"
+                "block multicast DNS.")
+    def label(entry):
+        # Strip the service type; the instance name is what identifies a device.
+        return entry['service'].split('._mcp._tcp.')[0]
+
+    width = max(len(label(entry)) for entry in entries)
+    lines = [f"Found {len(entries)} EWP endpoint{'s' if len(entries) > 1 else ''}.", '']
+    for entry in sorted(entries, key=lambda item: (item['role'], item['service'])):
+        lines.append(f"  {label(entry):<{width}}  {ROLES.get(entry['role'], entry['role'])}")
+        lines.append(f"  {'':<{width}}  {entry['endpoint']}")
+        lines.append('')
+    lines.append('Each endpoint has its own access token and expects it as')
+    lines.append('Authorization: Bearer <token>. Call the `help` tool on one to')
+    lines.append('learn what it does before using anything else.')
+    return '\n'.join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seconds', type=int, default=5, choices=range(1, 31))
+    parser.add_argument('--json', action='store_true', help='Machine-readable output')
     args = parser.parse_args()
-    print(json.dumps(discover(args.seconds), indent=2))
+    entries = discover(args.seconds)
+    print(json.dumps(entries, indent=2) if args.json else report(entries))
 
 
 if __name__ == '__main__':

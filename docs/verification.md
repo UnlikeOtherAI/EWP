@@ -33,12 +33,37 @@ The temporary XCTest control harness is a development tool for paired USB device
 
 ## Changed screens
 
-The repository's primary branch has no prior app page. Images below show the new direct-device page. No credentials, pairing PINs or personal Settings screens are published.
+The app page was rebuilt on 1 November 2026. The previous page is the one
+shipped earlier the same day and captured below; nothing else on the device
+changed appearance. No credentials, pairing PINs or personal Settings screens
+are published.
 
 | Before | After |
 | --- | --- |
-| New iPad setup page; no prior equivalent. Physical iPad. | ![iPad direct MCP ready](screenshots/ipad-direct-ready.jpg) |
-| New iPad live-sharing state; no prior equivalent. Physical ReplayKit capture. | ![iPad direct sharing live](screenshots/ipad-direct-live.jpg) |
-| New iPhone setup page; no prior equivalent. Simulator. | ![iPhone direct MCP ready, simulator](screenshots/iphone-direct-ready.jpg) |
+| ![iPhone, previous page](screenshots/iphone-direct-ready.jpg) | ![iPhone, rebuilt page](screenshots/iphone-home.jpg) |
+| Four sections, two always-visible Wi-Fi fields, Apple's unstyled broadcast control, and state as raw strings. Physical iPad / simulator. | Three cards, one action each. iPhone 16 Pro Max simulator, signed build. |
+| No prior dark-appearance capture. | ![iPhone dark, rebuilt page](screenshots/iphone-home-dark.jpg) |
+| | The accent has its own dark variant in the asset catalogue; cards use elevated system colours rather than an inversion. |
+| ![iPad, previous page](screenshots/ipad-direct-ready.jpg) | ![iPad, rebuilt page](screenshots/ipad-home.jpg) |
+| Rows stretched the full width of the iPad with the content ending a third of the way down. | Content is held to a readable column aligned with the navigation title. iPad Air 13 M3 simulator. |
 
-Keyboard delivery, automatic reconnection, persistence across reboot and pointer delivery require separate physical proof. Successful builds, Bluetooth advertisements and accepted notification calls do not establish those outcomes.
+The setup sheet and the Advanced screens are new, with no prior equivalent.
+The setup sheet was exercised on the simulator, where it correctly reports
+missing Bluetooth at step one and leaves the remaining steps pending.
+
+## Verification for this change
+
+| Check | Host / source | Result |
+| --- | --- | --- |
+| iOS build | Mac, Xcode 27.1, iphonesimulator | Passed, signed with the UnlikeOtherAI team. |
+| Rendered app page | iPhone 16 Pro Max and iPad Air 13 M3 simulators | Passed in light and dark appearance. Screenshots above. |
+| Screen-sharing request path | iPhone simulator | The button reaches the confirmation state. The broadcast itself cannot run on a simulator, so live capture is unverified here and still rests on the physical iPad evidence above. |
+| Keyboard setup sheet | iPhone simulator | Step states render from the provisioning phase. The Bluetooth path itself is unverified on a simulator. |
+| ESP32 firmware compilation | Mac, PlatformIO 6.1.18 | Run locally rather than on Maxis, which has no `uv` installed. |
+| Tool tests | macOS | Ten tests passed, two skipped as Windows-only. |
+| mDNS discovery and the `ewp-discover` CLI | macOS, live network | Four real endpoints found, including a physical ESP32 and iPad. |
+
+The `help` tool was added to all three endpoints but has not been exercised
+against a physical board or a real MCP client. Keyboard delivery, automatic
+reconnection, persistence across reboot and pointer delivery remain as
+described above and are not affected by this change.

@@ -63,3 +63,22 @@ class DeviceCommandTests(unittest.TestCase):
         self.assertIsInstance(args[0], list)
         self.assertNotIn("secret", " ".join(args[0]))
         self.assertEqual(kwargs["input"], b"secret")
+
+
+class DiscoveryReportTests(unittest.TestCase):
+    def test_report_names_each_role_and_endpoint(self):
+        from ewp_tools.discover import report
+        text = report([
+            {"service": "EWP app c86caa40", "role": "app", "endpoint": "http://a.local:7801/mcp"},
+            {"service": "ewp-c515b80c", "role": "keyboard", "endpoint": "http://k.local:80/mcp"},
+        ])
+        self.assertIn("Found 2 EWP endpoints.", text)
+        self.assertIn("iPhone or iPad", text)
+        self.assertIn("keyboard", text)
+        self.assertIn("http://k.local:80/mcp", text)
+
+    def test_report_explains_an_empty_result(self):
+        from ewp_tools.discover import report
+        text = report([])
+        self.assertIn("No EWP endpoints answered.", text)
+        self.assertIn("multicast DNS", text)
