@@ -2,27 +2,17 @@ import Foundation
 import Security
 
 struct Configuration: Codable {
-    let bridge: URL
     let token: String
     let deviceID: String
 
-    static func isLocalHost(_ host: String) -> Bool {
-        if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".local") { return true }
-        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-        let octets = parts.compactMap { UInt8($0) }
-        guard parts.count == 4, octets.count == 4, parts.allSatisfy({ $0 == "0" || !$0.hasPrefix("0") }) else { return false }
-        return octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) ||
-            (octets[0] == 172 && (16...31).contains(octets[1])) || octets[0] == 127
-    }
-
     private static var query: [String: Any] {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                   kSecAttrService as String: "ewp.connection",
-                                   kSecAttrAccount as String: "local-bridge"]
+        var value: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                   kSecAttrService as String: "ewp.native-mcp",
+                                   kSecAttrAccount as String: "device"]
         if let group = Bundle.main.object(forInfoDictionaryKey: "EWPKeychainGroup") as? String {
-            query[kSecAttrAccessGroup as String] = group
+            value[kSecAttrAccessGroup as String] = group
         }
-        return query
+        return value
     }
 
     static func load() throws -> Configuration {
@@ -30,44 +20,31 @@ struct Configuration: Codable {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var value: CFTypeRef?
-        let result = SecItemCopyMatching(query as CFDictionary, &value)
-        guard result == errSecSuccess, let data = value as? Data else {
-            throw EWPError.message("Connect the local bridge in EWP first. Keychain status: \(result)")
+        let status = SecItemCopyMatching(query as CFDictionary, &value)
+        guard status == errSecSuccess, let data = value as? Data else {
+            throw EWPError.message("Open EWP once to initialize this device. Keychain status: \(status)")
         }
-        let decoded = try JSONDecoder().decode(Self.self, from: data)
-        guard decoded.bridge.scheme == "http", let host = decoded.bridge.host, isLocalHost(host) else {
-            throw EWPError.message("The saved bridge must be on the local network.")
-        }
-        return decoded
+        return try JSONDecoder().decode(Self.self, from: data)
     }
 
-    func save() throws {
-        let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(self),
-                                        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let result = SecItemUpdate(Self.query as CFDictionary, attributes as CFDictionary)
-        if result == errSecItemNotFound {
-            let item = Self.query.merging(attributes) { _, value in value }
-            let added = SecItemAdd(item as CFDictionary, nil)
-            guard added == errSecSuccess else { throw EWPError.message("Cannot save bridge connection: \(added)") }
-        } else if result != errSecSuccess {
-            throw EWPError.message("Cannot update bridge connection: \(result)")
+    static func getOrCreate() throws -> Configuration {
+        if let existing = try? load() { return existing }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw EWPError.message("Could not create the device access token.")
         }
-    }
-
-    func request(_ path: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") -> URLRequest {
-        var request = URLRequest(url: bridge.appendingPathComponent(path))
-        request.httpMethod = method
-        request.httpBody = body
-        request.timeoutInterval = 4
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        return request
+        let value = Configuration(token: bytes.map { String(format: "%02x", $0) }.joined(),
+                                  deviceID: UUID().uuidString.lowercased())
+        var item = Self.query
+        item[kSecValueData as String] = try JSONEncoder().encode(value)
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let result = SecItemAdd(item as CFDictionary, nil)
+        guard result == errSecSuccess else { throw EWPError.message("Could not save device access: \(result)") }
+        return value
     }
 }
 
 enum EWPError: LocalizedError {
     case message(String)
-    var errorDescription: String? {
-        switch self { case .message(let text): return text }
-    }
+    var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
 }

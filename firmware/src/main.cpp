@@ -30,6 +30,14 @@ Preferences preferences;
 WebServer http(80);
 NimBLECharacteristic *keyboard, *mouse, *statusCharacteristic;
 String deviceId, token, setupStatus = "ready";
+String keyboardName;
+char selectedHost[32] = {};
+volatile uint32_t pairingUntil = 0;
+volatile bool advertisingNeeded = false;
+char pairingExcluded[8][32] = {};
+String pendingHostName;
+struct HostEvent { char id[32]; };
+QueueHandle_t hostEvents;
 uint32_t passkey;
 uint32_t provisionUntil;
 bool mdnsStarted = false;
@@ -43,30 +51,113 @@ uint16_t getHid() {
   portENTER_CRITICAL(&hidMux); auto handle = hidHandle; portEXIT_CRITICAL(&hidMux); return handle;
 }
 
+String hostId(const NimBLEAddress &address) {
+  return String(address.toString().c_str()) + "/" + String(address.getType());
+}
+String selectedId() {
+  char copy[32]; portENTER_CRITICAL(&hidMux); memcpy(copy, selectedHost, sizeof(copy)); portEXIT_CRITICAL(&hidMux);
+  return String(copy);
+}
+void reserveHost(const String &id) {
+  portENTER_CRITICAL(&hidMux); strlcpy(selectedHost, id.c_str(), sizeof(selectedHost));
+  hidHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
+}
+bool pairingOpen() { return static_cast<int32_t>(pairingUntil - millis()) > 0; }
+bool permittedHost(NimBLEConnInfo &info) {
+  String id = hostId(info.getIdAddress());
+  if (!pairingOpen()) return selectedId() == id;
+  bool excluded = false;
+  portENTER_CRITICAL(&hidMux);
+  for (auto &prior : pairingExcluded) if (id == prior) excluded = true;
+  portEXIT_CRITICAL(&hidMux);
+  return !excluded;
+}
+void restartAdvertising() {
+  auto advertising = NimBLEDevice::getAdvertising();
+  advertising->stop();
+  while (NimBLEDevice::getWhiteListCount()) NimBLEDevice::whiteListRemove(NimBLEDevice::getWhiteListAddress(0));
+  bool restricted = !pairingOpen();
+  if (restricted) {
+    bool found = false;
+    for (int i=0; i<NimBLEDevice::getNumBonds(); ++i) {
+      auto address = NimBLEDevice::getBondedAddress(i);
+      if (hostId(address) == selectedId()) { found = NimBLEDevice::whiteListAdd(address); break; }
+    }
+    if (!found) return; // No fallback to a different previously paired phone.
+  }
+  advertising->setScanFilter(false, restricted);
+  advertising->start();
+}
+void appendHosts(JsonDocument &doc) {
+  auto hosts = doc["hosts"].to<JsonArray>();
+  JsonDocument names; deserializeJson(names, preferences.getString("hostnames", "{}"));
+  for (int i=0; i<NimBLEDevice::getNumBonds(); ++i) {
+    auto id = hostId(NimBLEDevice::getBondedAddress(i));
+    auto item = hosts.add<JsonObject>(); item["host_id"] = id; item["selected"] = id == selectedId(); item["name"] = names[id] | "";
+    item["hid_connected"] = id == selectedId() && getHid() != BLE_HS_CONN_HANDLE_NONE;
+  }
+}
+void appendStatus(JsonDocument &doc) {
+  doc["id"] = deviceId; doc["name"] = keyboardName; doc["firmware"] = "0.2.0";
+  doc["selected_host"] = selectedId(); doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
+  doc["pairing_open"] = pairingOpen(); doc["saved_hosts"] = NimBLEDevice::getNumBonds();
+  doc["host_switching"] = true;
+  if (!selectedId().isEmpty() && getHid() == BLE_HS_CONN_HANDLE_NONE) doc["state"] = "waiting_for_selected_host";
+}
+bool beginPairing(JsonDocument &out) {
+  if (NimBLEDevice::getNumBonds() >= 8) { out["error"] = "Eight bonds are saved; pairing was not opened and no bond was deleted"; return false; }
+  char excluded[8][32] = {};
+  for (int i=0; i<NimBLEDevice::getNumBonds() && i<8; ++i) strlcpy(excluded[i], hostId(NimBLEDevice::getBondedAddress(i)).c_str(), 32);
+  portENTER_CRITICAL(&hidMux); memcpy(pairingExcluded, excluded, sizeof(excluded)); portEXIT_CRITICAL(&hidMux);
+  setHid(BLE_HS_CONN_HANDLE_NONE);
+  pairingUntil = millis()+180000;
+  for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
+  advertisingNeeded = true;
+  out["pairing_open"] = true; out["name"] = keyboardName; out["expires_seconds"] = 180;
+  out["pairing_code"] = passkey;
+  return true;
+}
+bool chooseHost(const String &id, JsonDocument &out) {
+  bool found = false;
+  for (int i=0; i<NimBLEDevice::getNumBonds(); ++i) if (hostId(NimBLEDevice::getBondedAddress(i)) == id) found = true;
+  if (!found) { out["error"] = "Unknown saved host; pair it first"; return false; }
+  pairingUntil = 0; reserveHost(id); preferences.putString("selected", id);
+  for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
+  advertisingNeeded = true;
+  out["selected_host"] = id; out["connected"] = false; out["state"] = "waiting_for_selected_host";
+  return true;
+}
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     server->updateConnParams(info.getConnHandle(), 12, 24, 0, 200);
-    NimBLEDevice::startAdvertising();
+    advertisingNeeded = true;
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int) override {
     if (getHid() == info.getConnHandle()) setHid(BLE_HS_CONN_HANDLE_NONE);
-    NimBLEDevice::startAdvertising();
+    advertisingNeeded = true;
   }
   uint32_t onPassKeyDisplay() override { return passkey; }
   void onAuthenticationComplete(NimBLEConnInfo &info) override {
-    if (!info.isEncrypted() || !info.isAuthenticated())
+    if (!info.isEncrypted() || !info.isAuthenticated() ||
+        (!permittedHost(info) && millis() > provisionUntil))
       NimBLEDevice::getServer()->disconnect(info.getConnHandle());
   }
 } serverCallbacks;
 
 class ReportCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &info, uint16_t value) override {
-    if (value && info.isEncrypted() && info.isAuthenticated()) {
-      uint16_t current = getHid();
-      // Never broadcast input to every subscribed peer. One explicit host only.
-      if (current == BLE_HS_CONN_HANDLE_NONE || current == info.getConnHandle()) setHid(info.getConnHandle());
-      else NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+    if (!value || !info.isEncrypted() || !info.isAuthenticated()) return;
+    uint16_t current = getHid();
+    if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
     }
+    String id = hostId(info.getIdAddress());
+    if (pairingOpen()) {
+      reserveHost(id); pairingUntil = 0;
+      HostEvent event{}; strlcpy(event.id, id.c_str(), sizeof(event.id)); xQueueOverwrite(hostEvents, &event);
+      advertisingNeeded = true;
+    }
+    setHid(info.getConnHandle());
   }
 } reportCallbacks;
 
@@ -102,59 +193,101 @@ bool authorized() {
   }
   return true;
 }
-bool parseInput(JsonDocument &doc) {
-  if (!authorized()) return false;
-  if (http.arg("plain").length() > 256 || deserializeJson(doc, http.arg("plain"))) {
-    http.send(400, "application/json", "{\"error\":\"Invalid input\"}"); return false;
-  }
-  if (getHid() == BLE_HS_CONN_HANDLE_NONE) {
-    http.send(409, "application/json", "{\"error\":\"No paired HID host subscribed\"}"); return false;
-  }
-  return true;
+// Each board is its own stateless MCP endpoint; no computer forwards input.
+void rpcError(JsonDocument &reply, int code, const char *message) {
+  auto error = reply["error"].to<JsonObject>(); error["code"] = code; error["message"] = message;
 }
-void notificationResult(bool sent, bool released) {
-  http.send(sent && released ? 200 : 503, "application/json",
-    sent && released ? "{\"notified\":true,\"host_action_verified\":false}" : "{\"error\":\"HID notification failed\"}");
+void toolText(JsonDocument &reply, JsonDocument &data, bool failed = false) {
+  auto result = reply["result"].to<JsonObject>(); result["isError"] = failed;
+  auto item = result["content"].to<JsonArray>().add<JsonObject>();
+  item["type"] = "text"; String text; serializeJson(data, text); item["text"] = text;
+}
+void addTool(JsonArray tools, const char *name, const char *description, const char *schema) {
+  auto tool = tools.add<JsonObject>(); tool["name"] = name; tool["description"] = description;
+  JsonDocument parsed; deserializeJson(parsed, schema); tool["inputSchema"] = parsed.as<JsonObject>();
+}
+void appendStatus(JsonDocument &doc);
+void appendHosts(JsonDocument &doc);
+bool beginPairing(JsonDocument &out);
+bool chooseHost(const String &id, JsonDocument &out);
+
+void handleMCP() {
+  if (!authorized()) return;
+  JsonDocument request, reply;
+  reply["jsonrpc"] = "2.0";
+  if (http.arg("plain").length() > 4096 || deserializeJson(request, http.arg("plain"))) {
+    reply["id"] = nullptr; rpcError(reply, -32700, "Invalid JSON request"); jsonReply(200, reply); return;
+  }
+  if (request["jsonrpc"] != "2.0" || !request["method"].is<String>() ||
+      (!request["id"].isNull() && !request["id"].is<String>() && !request["id"].is<int>())) {
+    reply["id"] = nullptr; rpcError(reply, -32600, "Invalid JSON-RPC request"); jsonReply(200, reply); return;
+  }
+  String method = request["method"];
+  if (request["id"].isNull() && method.startsWith("notifications/")) { http.send(202); return; }
+  reply["id"] = request["id"];
+  if (method == "initialize") {
+    auto result = reply["result"].to<JsonObject>(); result["protocolVersion"] = "2025-03-26";
+    result["capabilities"]["tools"].to<JsonObject>();
+    result["serverInfo"]["name"] = "EWP ESP32"; result["serverInfo"]["version"] = "0.2.0";
+  } else if (method == "ping") {
+    reply["result"].to<JsonObject>();
+  } else if (method == "tools/list") {
+    auto tools = reply["result"]["tools"].to<JsonArray>();
+    addTool(tools, "device_status", "Read this keyboard's Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
+    addTool(tools, "list_hosts", "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
+    addTool(tools, "start_pairing", "Disconnect input and advertise as an UnlikeOtherAI keyboard for a new host. Existing bonds stay saved. Pair in the target's Bluetooth settings.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64}},"additionalProperties":false})");
+    addTool(tools, "select_host", "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"}},"required":["host_id"],"additionalProperties":false})");
+    addTool(tools, "press_key", "Press and release one HID keyboard usage on the selected host. Enter=40, Tab=43, Escape=41, Space=44; left GUI modifier=8. Check the target screen to verify its action.", R"({"type":"object","properties":{"usage":{"type":"integer","minimum":4,"maximum":101},"modifiers":{"type":"integer","minimum":0,"maximum":255,"default":0}},"required":["usage"],"additionalProperties":false})");
+    addTool(tools, "move_pointer", "Relative mouse movement, wheel scrolling or a left click on the selected host. iPhone pointer control requires AssistiveTouch.", R"({"type":"object","properties":{"dx":{"type":"integer","minimum":-127,"maximum":127,"default":0},"dy":{"type":"integer","minimum":-127,"maximum":127,"default":0},"wheel":{"type":"integer","minimum":-127,"maximum":127,"default":0},"click":{"type":"boolean","default":false}},"additionalProperties":false})");
+  } else if (method == "tools/call") {
+    String name = request["params"]["name"] | "";
+    auto args = request["params"]["arguments"].as<JsonObject>();
+    JsonDocument out; bool failed = false;
+    if (name == "device_status") appendStatus(out);
+    else if (name == "list_hosts") appendHosts(out);
+    else if (name == "start_pairing") {
+      pendingHostName = args["name"] | "";
+      if (pendingHostName.length() > 64) { out["error"] = "Host name is limited to 64 bytes"; failed = true; }
+      else failed = !beginPairing(out);
+    }
+    else if (name == "select_host") {
+      if (!args["host_id"].is<String>()) { out["error"] = "host_id is required"; failed = true; }
+      else failed = !chooseHost(args["host_id"].as<String>(), out);
+    } else if (name == "press_key" || name == "move_pointer") {
+      uint16_t target = getHid();
+      if (target == BLE_HS_CONN_HANDLE_NONE) { out["error"] = "Selected host is not connected and subscribed"; failed = true; }
+      else if (name == "press_key") {
+        if (!args["usage"].is<int>() || args["usage"].as<int>() < 4 || args["usage"].as<int>() > 101 ||
+            (!args["modifiers"].isNull() && (!args["modifiers"].is<int>() || args["modifiers"].as<int>() < 0 || args["modifiers"].as<int>() > 255))) {
+          out["error"] = "Invalid HID usage or modifiers"; failed = true;
+        } else {
+          uint8_t report[8] = {static_cast<uint8_t>(args["modifiers"] | 0), 0, static_cast<uint8_t>(args["usage"].as<int>()), 0,0,0,0,0};
+          bool sent = keyboard->notify(report, sizeof(report), target); delay(20);
+          memset(report, 0, sizeof(report)); bool released = keyboard->notify(report, sizeof(report), target);
+          out["notified"] = sent && released; out["host_action_verified"] = false; failed = !(sent && released);
+        }
+      } else {
+        for (const char *key : {"dx", "dy", "wheel"}) {
+          if (!args[key].isNull() && (!args[key].is<int>() || args[key].as<int>() < -127 || args[key].as<int>() > 127)) failed = true;
+        }
+        if (!args["click"].isNull() && !args["click"].is<bool>()) failed = true;
+        if (failed) out["error"] = "Invalid pointer input";
+        else {
+          uint8_t report[] = {static_cast<uint8_t>(args["click"].as<bool>() ? 1 : 0), static_cast<uint8_t>(args["dx"] | 0), static_cast<uint8_t>(args["dy"] | 0), static_cast<uint8_t>(args["wheel"] | 0)};
+          bool sent = mouse->notify(report, sizeof(report), target); delay(20);
+          memset(report, 0, sizeof(report)); bool released = mouse->notify(report, sizeof(report), target);
+          out["notified"] = sent && released; out["host_action_verified"] = false; failed = !(sent && released);
+        }
+      }
+    } else { out["error"] = "Unknown tool"; failed = true; }
+    toolText(reply, out, failed);
+  } else rpcError(reply, -32601, "Method not found");
+  jsonReply(200, reply);
 }
 void setupHttp() {
   const char *headers[] = {"Authorization", "Origin"}; http.collectHeaders(headers, 2);
-  http.on("/status", HTTP_GET, [] {
-    if (!authorized()) return;
-    JsonDocument doc; doc["id"] = deviceId; doc["firmware"] = "0.1.0";
-    doc["hid_connected"] = getHid() != BLE_HS_CONN_HANDLE_NONE;
-    doc["host_switching"] = false; jsonReply(200, doc);
-  });
-  http.on("/key", HTTP_POST, [] {
-    JsonDocument doc; if (!parseInput(doc)) return;
-    if (!doc["usage"].is<int>() || !doc["modifiers"].is<int>()) {
-      http.send(400, "application/json", "{\"error\":\"Expected integer usage and modifiers\"}"); return;
-    }
-    int usage = doc["usage"], modifiers = doc["modifiers"];
-    if (usage < 4 || usage > 101 || modifiers < 0 || modifiers > 255) {
-      http.send(400, "application/json", "{\"error\":\"Out of range\"}"); return;
-    }
-    uint16_t target = getHid();
-    uint8_t report[8] = {static_cast<uint8_t>(modifiers), 0, static_cast<uint8_t>(usage), 0,0,0,0,0};
-    bool sent = keyboard->notify(report, sizeof(report), target); delay(20);
-    memset(report, 0, sizeof(report)); bool released = keyboard->notify(report, sizeof(report), target);
-    notificationResult(sent, released);
-  });
-  http.on("/pointer", HTTP_POST, [] {
-    JsonDocument doc; if (!parseInput(doc)) return;
-    for (const char *key : {"dx", "dy", "wheel"}) {
-      if (!doc[key].is<int>() || doc[key].as<int>() < -127 || doc[key].as<int>() > 127) {
-        http.send(400, "application/json", "{\"error\":\"Invalid delta\"}"); return;
-      }
-    }
-    if (!doc["click"].is<bool>()) { http.send(400, "application/json", "{\"error\":\"Invalid click\"}"); return; }
-    uint16_t target = getHid();
-    uint8_t report[] = {static_cast<uint8_t>(doc["click"].as<bool>() ? 1 : 0),
-      static_cast<uint8_t>(doc["dx"].as<int>()), static_cast<uint8_t>(doc["dy"].as<int>()),
-      static_cast<uint8_t>(doc["wheel"].as<int>())};
-    bool sent = mouse->notify(report, sizeof(report), target); delay(20);
-    memset(report, 0, sizeof(report)); bool released = mouse->notify(report, sizeof(report), target);
-    notificationResult(sent, released);
-  });
+  http.on("/mcp", HTTP_POST, handleMCP);
+  http.on("/mcp", HTTP_GET, [] { if (authorized()) { http.sendHeader("Allow", "POST"); http.send(405); } });
   http.onNotFound([] { http.send(404, "application/json", "{\"error\":\"Not found\"}"); });
   http.begin();
 }
@@ -169,11 +302,21 @@ void setup() {
   Serial.printf("\nEWP %s\nBluetooth pairing code: %06u\n", deviceId.c_str(), passkey);
   provisionUntil = millis() + 300000;
   configurationQueue = xQueueCreate(1, sizeof(Configuration));
+  hostEvents = xQueueCreate(1, sizeof(HostEvent));
+  reserveHost(preferences.getString("selected", ""));
+
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true);
   token = preferences.isKey("token") ? preferences.getString("token") : "";
+  if (token.length() != 64) {
+    token = "";
+    for (int i=0; i<8; ++i) { char part[9]; snprintf(part, sizeof(part), "%08lx", static_cast<unsigned long>(esp_random())); token += part; }
+    preferences.putString("token", token);
+  }
   String ssid = preferences.isKey("ssid") ? preferences.getString("ssid") : "";
   if (!ssid.isEmpty()) WiFi.begin(ssid.c_str(), preferences.getString("password", "").c_str());
-  NimBLEDevice::init(deviceId.c_str());
+  keyboardName = "UnlikeOtherAI Keyboard " + deviceId.substring(deviceId.length() - 6);
+  NimBLEDevice::init(keyboardName.c_str());
+  if (NimBLEDevice::getNumBonds() == 0 || selectedId().isEmpty()) pairingUntil = millis() + 300000;
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEDevice::setSecurityPasskey(passkey);
@@ -193,12 +336,52 @@ void setup() {
   service->start();
   server->start();
   auto advertising = NimBLEDevice::getAdvertising();
-  advertising->setAppearance(0x03C1); advertising->setName(deviceId.c_str());
-  advertising->addServiceUUID(SERVICE); advertising->addServiceUUID(NimBLEUUID((uint16_t)0x1812)); advertising->enableScanResponse(true); advertising->start();
+  advertising->setAppearance(0x03C1);
+  advertising->addServiceUUID(SERVICE); advertising->addServiceUUID(NimBLEUUID((uint16_t)0x1812)); advertising->enableScanResponse(true);
+  NimBLEAdvertisementData scanResponse; scanResponse.setName(keyboardName.c_str()); advertising->setScanResponseData(scanResponse);
+  restartAdvertising();
   setupHttp();
 }
 
+// One-off physical USB setup; these responses are never emitted unsolicited.
+// The setup client stores access material privately instead of printing it.
+void serialSetup() {
+  static String line;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c != '\n') { if (line.length() < 1024) line += c; else line = ""; continue; }
+    JsonDocument request, reply;
+    if (!deserializeJson(request, line)) {
+      String method = request["method"] | "";
+      if (method == "access") { reply["id"] = deviceId; reply["token"] = token; reply["pairing_code"] = passkey; }
+      else if (method == "setup_wifi") {
+        String ssid = request["ssid"] | "", password = request["password"] | "";
+        if (ssid.length() > 0 && ssid.length() <= 32 && password.length() <= 64) {
+          Configuration config{}; strlcpy(config.ssid, ssid.c_str(), sizeof(config.ssid));
+          strlcpy(config.password, password.c_str(), sizeof(config.password)); strlcpy(config.token, token.c_str(), sizeof(config.token));
+          xQueueOverwrite(configurationQueue, &config); reply["submitted"] = true;
+        } else reply["error"] = "Invalid Wi-Fi configuration";
+      } else if (method == "status") appendStatus(reply);
+      else reply["error"] = "Unknown USB setup command";
+      serializeJson(reply, Serial); Serial.println();
+    }
+    line = "";
+  }
+}
 void loop() {
+  serialSetup();
+  HostEvent hostEvent;
+  if (xQueueReceive(hostEvents, &hostEvent, 0) == pdTRUE) {
+    preferences.putString("selected", hostEvent.id);
+    if (!pendingHostName.isEmpty()) {
+      JsonDocument names; deserializeJson(names, preferences.getString("hostnames", "{}")); names[hostEvent.id] = pendingHostName;
+      String json; serializeJson(names, json); preferences.putString("hostnames", json); pendingHostName = "";
+    }
+  }
+  static bool wasPairing = false;
+  bool open = pairingOpen();
+  if (wasPairing != open) { advertisingNeeded = true; wasPairing = open; }
+  if (advertisingNeeded) { advertisingNeeded = false; restartAdvertising(); }
   Configuration config;
   if (xQueueReceive(configurationQueue, &config, 0) == pdTRUE) {
     preferences.putString("ssid", config.ssid); preferences.putString("password", config.password);
@@ -208,7 +391,7 @@ void loop() {
   }
   if (WiFi.status() == WL_CONNECTED && !mdnsStarted) {
     mdnsStarted = MDNS.begin(deviceId.c_str());
-    if (mdnsStarted) { MDNS.addService("ewp", "tcp", 80); MDNS.addServiceTxt("ewp", "tcp", "id", deviceId); }
+    if (mdnsStarted) { MDNS.addService("mcp", "tcp", 80); MDNS.addServiceTxt("mcp", "tcp", "id", deviceId); MDNS.addServiceTxt("mcp", "tcp", "path", "/mcp"); MDNS.addServiceTxt("mcp", "tcp", "role", "keyboard"); }
     Serial.printf("Wi-Fi connected, address: %s\n", WiFi.localIP().toString().c_str());
   }
   if (WiFi.status() != WL_CONNECTED && mdnsStarted) { MDNS.end(); mdnsStarted = false; }

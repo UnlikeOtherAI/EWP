@@ -24,9 +24,9 @@ targets:
         CFBundleDisplayName: EWP
         EWPKeychainGroup: $(AppIdentifierPrefix)com.unlikeotherai.ewp
         UILaunchScreen: {}
-        NSLocalNetworkUsageDescription: EWP finds your ESP32 and sends screen frames to your local MCP bridge.
+        NSLocalNetworkUsageDescription: EWP advertises its own MCP server and discovers keyboards on your local network.
         NSBluetoothAlwaysUsageDescription: EWP configures your ESP32's Wi-Fi connection over Bluetooth.
-        NSBonjourServices: ['_ewp._tcp', '_ewpbridge._tcp']
+        NSBonjourServices: ['_mcp._tcp']
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoads: true
@@ -50,6 +50,8 @@ targets:
       path: Broadcast/Info.plist
       properties:
         CFBundleDisplayName: EWP Screen Sharing
+        NSLocalNetworkUsageDescription: EWP shares this screen directly with your MCP client on the local network.
+        NSBonjourServices: ['_mcp._tcp']
         EWPKeychainGroup: $(AppIdentifierPrefix)com.unlikeotherai.ewp
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -62,8 +64,21 @@ targets:
       path: Broadcast/Broadcast.entitlements
       properties:
         keychain-access-groups: ['$(AppIdentifierPrefix)com.unlikeotherai.ewp']
+  EWPUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [EWPUITests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.unlikeotherai.ewp.UITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: EWP
+    dependencies:
+      - target: EWP
 schemes:
   EWP:
     build:
       targets:
         EWP: all
+    test:
+      targets: [EWPUITests]

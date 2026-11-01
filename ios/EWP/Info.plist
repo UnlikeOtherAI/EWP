@@ -33,11 +33,10 @@
 	<string>EWP configures your ESP32's Wi-Fi connection over Bluetooth.</string>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_ewp._tcp</string>
-		<string>_ewpbridge._tcp</string>
+		<string>_mcp._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>EWP finds your ESP32 and sends screen frames to your local MCP bridge.</string>
+	<string>EWP advertises its own MCP server and discovers keyboards on your local network.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
