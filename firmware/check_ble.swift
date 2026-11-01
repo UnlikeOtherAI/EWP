@@ -16,7 +16,7 @@ final class Probe: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         if central.state == .poweredOn { central.scanForPeripherals(withServices: [serviceID]) }
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String:Any], rssi RSSI: NSNumber) {
-        guard peripheral.name == target, device == nil else { return }
+        guard (advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name) == target, device == nil else { return }
         device = peripheral; peripheral.delegate = self; central.stopScan(); central.connect(peripheral)
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {

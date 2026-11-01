@@ -28,9 +28,11 @@ final class CompanionModel: ObservableObject {
                 MCPTool(name: "start_screen_sharing", description: "Open Apple's screen-sharing confirmation on this device. Success means the dialog was requested; check get_status for live frames."),
                 MCPTool(name: "stop_screen_sharing", description: "Stop this device's active screen-sharing broadcast."),
                 MCPTool(name: "discover_devices", description: "Find native MCP endpoints through mDNS and nearby ESP32 keyboards through Bluetooth."),
-                MCPTool(name: "configure_esp32", description: "Provision a nearby ESP32 with 2.4 GHz Wi-Fi. It then runs its own MCP server, independently of this app.",
+                MCPTool(name: "select_esp32", description: "Select a nearby ESP32 for one-time setup without submitting Wi-Fi credentials.",
+                        properties: ["bluetooth_id": ["type": "string"]], required: ["bluetooth_id"]),
+                MCPTool(name: "configure_esp32", description: "Provision an ESP32 with 2.4 GHz Wi-Fi. Supply ssid and password together, or omit both to submit the form values entered privately in EWP. bluetooth_id defaults to the selected keyboard. The password is never returned.",
                         properties: ["bluetooth_id": ["type": "string"], "ssid": ["type": "string"], "password": ["type": "string"]],
-                        required: ["bluetooth_id", "ssid", "password"])
+                        required: [])
             ]
             let server = MCPServer(configuration: configuration, role: "app", port: 7801, tools: tools) { [weak self] name, args in
                 guard let self else { throw EWPError.message("EWP is closing.") }
@@ -51,6 +53,8 @@ final class CompanionModel: ObservableObject {
         }
     }
 
+    func rescan() { discovery.restart(); provisioning.rescan() }
+
     func copyToken() { if let configuration { UIPasteboard.general.string = configuration.token } }
 
     func configureWiFi() {
@@ -62,8 +66,8 @@ final class CompanionModel: ObservableObject {
 
     private func status() -> [String: Any] {
         ["device_id": configuration?.deviceID ?? "", "server": serverStatus, "screen_sharing_live": captureLive,
-         "screen_mcp_port": 7802, "bluetooth": provisioning.message, "wifi_setup_ready": provisioning.ready,
-         "nearby_keyboards": provisioning.nearby.map { ["bluetooth_id": $0.identifier.uuidString, "name": $0.name ?? "ESP32"] },
+         "screen_mcp_port": 7802, "bluetooth": provisioning.message, "wifi_setup_ready": provisioning.ready, "selected_keyboard": provisioning.selectedBluetoothID ?? "",
+         "nearby_keyboards": provisioning.nearby.map { ["bluetooth_id": $0.identifier.uuidString, "name": provisioning.displayName($0)] },
          "mcp_devices": discovery.services.map { ["name": $0.name, "endpoint": $0.url.absoluteString, "role": $0.role] },
          "discovery_error": discovery.error ?? ""]
     }
@@ -71,7 +75,7 @@ final class CompanionModel: ObservableObject {
     private func call(_ name: String, _ args: [String: Any]) async throws -> [[String: Any]] {
         switch name {
         case "get_status": return try MCPServer.text(status())
-        case "discover_devices": discovery.restart(); return try MCPServer.text(status())
+        case "discover_devices": rescan(); return try MCPServer.text(status())
         case "start_screen_sharing":
             if captureLive { return try MCPServer.text(["requested": false, "live": true]) }
             guard let button = broadcastPicker?.subviews.compactMap({ $0 as? UIButton }).first else {
@@ -93,9 +97,24 @@ final class CompanionModel: ObservableObject {
             let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) }
             guard let data = image.jpegData(compressionQuality: 0.7) else { throw EWPError.message("Could not capture EWP.") }
             return try MCPServer.text(["source": "app", "screen_sharing_live": false]) + [["type": "image", "data": data.base64EncodedString(), "mimeType": "image/jpeg"]]
+        case "select_esp32":
+            guard let id = args["bluetooth_id"] as? String,
+                  let device = provisioning.nearby.first(where: { $0.identifier.uuidString == id }) else {
+                throw EWPError.message("Choose a nearby keyboard from get_status.")
+            }
+            provisioning.connect(device)
+            return try MCPServer.text(status())
         case "configure_esp32":
-            guard let id = args["bluetooth_id"] as? String, let ssid = args["ssid"] as? String,
-                  let password = args["password"] as? String,
+            let useForm = args["ssid"] == nil && args["password"] == nil
+            guard useForm || (args["ssid"] is String && args["password"] is String) else {
+                throw EWPError.message("Provide both Wi-Fi fields, or omit both to submit the app form.")
+            }
+            let ssid = args["ssid"] as? String ?? self.ssid
+            let password = args["password"] as? String ?? self.password
+            guard !ssid.isEmpty, ssid.utf8.count <= 32, password.utf8.count <= 64 else {
+                throw EWPError.message("Enter the 2.4 GHz Wi-Fi name and password.")
+            }
+            guard let id = args["bluetooth_id"] as? String ?? provisioning.selectedBluetoothID,
                   let device = provisioning.nearby.first(where: { $0.identifier.uuidString == id }) else {
                 throw EWPError.message("Choose a nearby keyboard from get_status and provide its Wi-Fi details.")
             }
@@ -106,6 +125,7 @@ final class CompanionModel: ObservableObject {
             }
             guard provisioning.ready else { throw EWPError.message(provisioning.message) }
             try provisioning.configure(ssid: ssid, password: password)
+            if useForm { self.password = "" }
             return try MCPServer.text(["submitted": true, "state": provisioning.message])
         default: throw EWPError.message("Unknown tool.")
         }

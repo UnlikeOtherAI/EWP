@@ -180,11 +180,11 @@ class ReportCallbacks : public NimBLECharacteristicCallbacks {
 
 class ProvisionCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &info) override {
-    if (!info.isAuthenticated() || !info.isEncrypted() || millis() > provisionUntil) return;
     JsonDocument doc;
     auto value = characteristic->getValue();
     // Drop sensitive data from the readable characteristic immediately.
     characteristic->setValue("");
+    if (!info.isAuthenticated() || !info.isEncrypted() || millis() > provisionUntil) return;
     if (value.size() > 512 || deserializeJson(doc, value.c_str(), value.size())) return;
     String ssid = doc["ssid"] | "", password = doc["password"] | "";
     if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 64) return;
@@ -251,7 +251,7 @@ void handleMCP() {
     addTool(tools, "device_status", "Read this keyboard's Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "list_hosts", "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "start_pairing", "Disconnect input and advertise as an UnlikeOtherAI keyboard for a new host. Existing bonds stay saved. Pair in the target's Bluetooth settings.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64}},"additionalProperties":false})");
-    addTool(tools, "select_host", "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"}},"required":["host_id"],"additionalProperties":false})");
+    addTool(tools, "select_host", "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
     addTool(tools, "press_key", "Press and release one HID keyboard usage on the selected host. Enter=40, Tab=43, Escape=41, Space=44; left GUI modifier=8. Check the target screen to verify its action.", R"({"type":"object","properties":{"usage":{"type":"integer","minimum":4,"maximum":101},"modifiers":{"type":"integer","minimum":0,"maximum":255,"default":0}},"required":["usage"],"additionalProperties":false})");
     addTool(tools, "move_pointer", "Relative mouse movement, wheel scrolling or a left click on the selected host. iPhone pointer control requires AssistiveTouch.", R"({"type":"object","properties":{"dx":{"type":"integer","minimum":-127,"maximum":127,"default":0},"dy":{"type":"integer","minimum":-127,"maximum":127,"default":0},"wheel":{"type":"integer","minimum":-127,"maximum":127,"default":0},"click":{"type":"boolean","default":false}},"additionalProperties":false})");
   } else if (method == "tools/call") {
@@ -267,7 +267,15 @@ void handleMCP() {
     }
     else if (name == "select_host") {
       if (!args["host_id"].is<String>()) { out["error"] = "host_id is required"; failed = true; }
-      else failed = !chooseHost(args["host_id"].as<String>(), out);
+      else if ((!args["name"].isNull() && !args["name"].is<String>()) || args["name"].as<String>().length() > 64) {
+        out["error"] = "Host name is limited to 64 bytes"; failed = true;
+      } else {
+        String id = args["host_id"].as<String>(); failed = !chooseHost(id, out);
+        if (!failed && args["name"].is<String>()) {
+          JsonDocument names; deserializeJson(names, preferences.getString("hostnames", "{}")); names[id] = args["name"].as<String>();
+          String value; serializeJson(names, value); preferences.putString("hostnames", value);
+        }
+      }
     } else if (name == "press_key" || name == "move_pointer") {
       uint16_t target = getHid();
       if (target == BLE_HS_CONN_HANDLE_NONE) { out["error"] = "Selected host is not connected and subscribed"; failed = true; }

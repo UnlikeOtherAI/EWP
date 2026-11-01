@@ -71,7 +71,7 @@ BLE Wi-Fi setup is authenticated and encrypted and opens for five minutes after 
 1. Call the ESP32's `start_pairing`, optionally with a name for the new target. Existing bonds stay saved. Input stops while a new target is being paired.
 2. In the target's Bluetooth settings, pair **UnlikeOtherAI Keyboard …** using the returned pairing code. This works without EWP installed on the target.
 3. Call `list_hosts` to see saved host IDs. They come from the bonded identity address, not a rotating Bluetooth address or a list position.
-4. Call `select_host` with the saved `host_id`. The ESP32 reserves input for that target and advertises with a connection allowlist. Poll `device_status` until that host subscribes before sending input.
+4. Call `select_host` with the saved `host_id`; optionally pass `name` to label an existing bond. The ESP32 reserves input for that target and advertises with a connection allowlist. Poll `device_status` until that host subscribes before sending input.
 
 The central device decides whether and when to reconnect. An unavailable target leaves input disabled; the ESP32 must never silently route input to another bonded host. The current board configuration holds eight bonds. If full, pairing fails without deleting an old bond.
 
@@ -95,7 +95,8 @@ For pointer control on iPhone, enable **Settings → Accessibility → Touch →
 | `start_screen_sharing` | Initiate Apple's broadcast confirmation |
 | `stop_screen_sharing` | Stop the on-device broadcast |
 | `discover_devices` | Restart mDNS discovery and report nearby devices |
-| `configure_esp32` | Configure a nearby board's Wi-Fi through encrypted BLE |
+| `select_esp32` | Select a nearby board for setup |
+| `configure_esp32` | Configure Wi-Fi through encrypted BLE; optionally submit private form values already entered on the device |
 
 The screen endpoint exposes `get_status`, `get_screen` and `stop_screen_sharing`. It rejects frames older than five seconds. It retains only the latest JPEG, at up to 1280 pixels on the longer side and two frames per second; audio is ignored.
 

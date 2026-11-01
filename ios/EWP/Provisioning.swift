@@ -9,10 +9,25 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     @Published var nearby: [CBPeripheral] = []
     @Published var message = "Looking for ESP32…"
     @Published var ready = false
+    @Published private var displayNames: [UUID: String] = [:]
+    var selectedBluetoothID: String? { peripheral?.identifier.uuidString }
+    func displayName(_ device: CBPeripheral) -> String { displayNames[device.identifier] ?? device.name ?? "UnlikeOtherAI keyboard" }
+
+    func rescan() {
+        guard central.state == .poweredOn else { return }
+        central.stopScan()
+        if let peripheral, peripheral.state == .connected {
+            nearby = [peripheral]
+            displayNames = displayNames.filter { $0.key == peripheral.identifier }
+        } else { nearby.removeAll(); displayNames.removeAll() }
+        central.scanForPeripherals(withServices: [Self.service])
+        if !ready { message = "Looking for ESP32…" }
+    }
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var characteristic: CBCharacteristic?
     private var timeout: Task<Void, Never>?
+    private var setupOpen: Bool?
 
     override init() {
         super.init()
@@ -30,14 +45,16 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        if let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String { displayNames[peripheral.identifier] = name }
         if !nearby.contains(where: { $0.identifier == peripheral.identifier }) { nearby.append(peripheral) }
     }
 
     func connect(_ device: CBPeripheral) {
-        if peripheral == device, device.state == .connected, characteristic != nil { ready = true; return }
+        if peripheral == device, device.state == .connected, characteristic != nil { ready = setupOpen == true; return }
         if let peripheral, peripheral != device { central.cancelPeripheralConnection(peripheral) }
         peripheral = device
         characteristic = nil
+        setupOpen = nil
         ready = false
         device.delegate = self
         message = "Connecting…"
@@ -56,6 +73,7 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         ready = false
         characteristic = nil
+        setupOpen = nil
         message = "ESP32 disconnected. Tap it to reconnect."
     }
 
@@ -67,13 +85,14 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error { message = error.localizedDescription; return }
         for item in service.characteristics ?? [] {
-            if item.uuid == Self.config { characteristic = item; ready = true; message = "Ready for Wi-Fi setup." }
+            if item.uuid == Self.config { characteristic = item; message = "Checking Wi-Fi setup window…" }
             if item.uuid == Self.status { peripheral.setNotifyValue(true, for: item); peripheral.readValue(for: item) }
         }
     }
 
     func configure(ssid: String, password: String) throws {
         guard let peripheral, let characteristic else { throw EWPError.message("Choose an ESP32 first.") }
+        guard ready else { throw EWPError.message(message) }
         guard !ssid.isEmpty, ssid.utf8.count <= 32, password.utf8.count <= 64 else {
             throw EWPError.message("Enter the 2.4 GHz Wi-Fi name and password.")
         }
@@ -99,6 +118,9 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let data = characteristic.value,
               let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        setupOpen = doc["setup_open"] as? Bool
+        ready = self.characteristic != nil && setupOpen == true
+        if ready, message == "Checking Wi-Fi setup window…" { message = "Ready for Wi-Fi setup." }
         if doc["state"] as? String == "connected" {
             timeout?.cancel()
             message = "ESP32 is on Wi-Fi. Pair it as a keyboard in Settings → Bluetooth."

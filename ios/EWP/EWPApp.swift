@@ -49,7 +49,7 @@ struct CompanionView: View {
                 }
                 Section("ESP32 Wi-Fi setup") {
                     ForEach(model.provisioning.nearby, id: \.identifier) { device in
-                        Button(device.name ?? "UnlikeOtherAI keyboard") { model.provisioning.connect(device) }
+                        Button(model.provisioning.displayName(device)) { model.provisioning.connect(device) }
                     }
                     Text(model.provisioning.message).font(.footnote)
                     TextField("Wi-Fi name (2.4 GHz)", text: $model.ssid)
@@ -69,7 +69,7 @@ struct CompanionView: View {
                             Text(service.url.absoluteString).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    Button("Find devices again") { model.discovery.restart() }
+                    Button("Find devices again") { model.rescan() }
                     if let error = model.discovery.error { Text(error).font(.footnote).foregroundStyle(.red) }
                 }
                 if let error = model.error { Section { Text(error).foregroundStyle(.red) } }
@@ -77,7 +77,7 @@ struct CompanionView: View {
             .navigationTitle("Expensive Wall of Phones")
             .task { await model.run() }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { model.discovery.restart(); model.server?.start() }
+                if phase == .active { model.rescan(); model.server?.start() }
             }
         }
     }
