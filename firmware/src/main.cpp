@@ -73,10 +73,12 @@ bool permittedHost(NimBLEConnInfo &info) {
   portEXIT_CRITICAL(&hidMux);
   return !excluded;
 }
-void restartAdvertising() {
+bool restartAdvertising() {
   auto advertising = NimBLEDevice::getAdvertising();
   advertising->stop();
-  while (NimBLEDevice::getWhiteListCount()) NimBLEDevice::whiteListRemove(NimBLEDevice::getWhiteListAddress(0));
+  for (int i=static_cast<int>(NimBLEDevice::getWhiteListCount())-1; i>=0; --i) {
+    if (!NimBLEDevice::whiteListRemove(NimBLEDevice::getWhiteListAddress(i))) return false;
+  }
   bool restricted = !pairingOpen();
   if (restricted) {
     bool found = false;
@@ -84,10 +86,10 @@ void restartAdvertising() {
       auto address = NimBLEDevice::getBondedAddress(i);
       if (hostId(address) == selectedId()) { found = NimBLEDevice::whiteListAdd(address); break; }
     }
-    if (!found) return; // No fallback to a different previously paired phone.
+    if (!found) return false; // No fallback to a different previously paired phone.
   }
   advertising->setScanFilter(false, restricted);
-  advertising->start();
+  return advertising->start();
 }
 void appendHosts(JsonDocument &doc) {
   auto hosts = doc["hosts"].to<JsonArray>();
@@ -352,7 +354,7 @@ void setup() {
   advertising->setAppearance(0x03C1);
   advertising->addServiceUUID(SERVICE); advertising->addServiceUUID(NimBLEUUID((uint16_t)0x1812)); advertising->enableScanResponse(true);
   NimBLEAdvertisementData scanResponse; scanResponse.setName(keyboardName.c_str()); advertising->setScanResponseData(scanResponse);
-  restartAdvertising();
+  advertisingNeeded = !restartAdvertising();
   setupHttp();
 }
 
@@ -394,17 +396,22 @@ void loop() {
   static bool wasPairing = false;
   bool open = pairingOpen();
   if (wasPairing != open) { advertisingNeeded = true; wasPairing = open; }
-  if (advertisingNeeded) { advertisingNeeded = false; restartAdvertising(); }
+  static uint32_t nextAdvertisingAttempt = 0;
+  if (advertisingNeeded && static_cast<int32_t>(millis()-nextAdvertisingAttempt) >= 0) {
+    advertisingNeeded = !restartAdvertising(); nextAdvertisingAttempt = millis()+1000;
+  }
   Configuration config;
   if (xQueueReceive(configurationQueue, &config, 0) == pdTRUE) {
     preferences.putString("ssid", config.ssid); preferences.putString("password", config.password);
     WiFi.disconnect(); WiFi.begin(config.ssid, config.password);
     memset(&config, 0, sizeof(config)); setupStatus = "joining";
   }
-  if (WiFi.status() == WL_CONNECTED && !mdnsStarted) {
+  static uint32_t nextMdnsAttempt = 0;
+  if (WiFi.status() == WL_CONNECTED && !mdnsStarted && static_cast<int32_t>(millis()-nextMdnsAttempt) >= 0) {
+    nextMdnsAttempt = millis()+2000;
     mdnsStarted = MDNS.begin(deviceId.c_str());
     if (mdnsStarted) { MDNS.addService("mcp", "tcp", 80); MDNS.addServiceTxt("mcp", "tcp", "id", deviceId); MDNS.addServiceTxt("mcp", "tcp", "path", "/mcp"); MDNS.addServiceTxt("mcp", "tcp", "role", "keyboard"); }
-    Serial.printf("Wi-Fi connected, address: %s\n", WiFi.localIP().toString().c_str());
+    if (mdnsStarted) Serial.printf("Wi-Fi connected, address: %s\n", WiFi.localIP().toString().c_str());
   }
   if (WiFi.status() != WL_CONNECTED && mdnsStarted) { MDNS.end(); mdnsStarted = false; }
   static uint32_t lastStatus = 0;

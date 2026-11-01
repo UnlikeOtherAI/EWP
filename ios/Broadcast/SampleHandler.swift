@@ -35,7 +35,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     case "get_status": return try MCPServer.text(["device_id": configuration.deviceID, "live": live, "sample_orientation": orientation])
                     case "get_screen":
                         guard live, let frame else { throw EWPError.message("No recent screen frame. Resume screen sharing on the device.") }
-                        return [["type": "image", "data": frame.base64EncodedString(), "mimeType": "image/jpeg"]]
+                        return try MCPServer.text(["source": "device", "live": true]) + [["type": "image", "data": frame.base64EncodedString(), "mimeType": "image/jpeg"]]
                     case "stop_screen_sharing":
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                             self.finishBroadcastWithError(EWPError.message("Screen sharing stopped by your MCP client."))
@@ -77,7 +77,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
             guard let self else { return }
             autoreleasepool {
                 var image = CIImage(cvPixelBuffer: pixelBuffer, options: [.applyOrientationProperty: false])
-                if let orientation = CGImagePropertyOrientation(rawValue: orientation) { image = image.oriented(orientation) }
+                if let orientation = CGImagePropertyOrientation(rawValue: orientation) {
+                    // ReplayKit describes the buffer's rotation. Undo its
+                    // quarter-turn before encoding upright JPEG pixels.
+                    let correction: CGImagePropertyOrientation
+                    switch orientation {
+                    case .left: correction = .right
+                    case .right: correction = .left
+                    default: correction = orientation
+                    }
+                    image = image.oriented(correction)
+                }
                 let scale = min(1, 1280 / max(image.extent.width, image.extent.height))
                 image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                 var encoded: Data?

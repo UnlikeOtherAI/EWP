@@ -92,7 +92,7 @@ final class CompanionModel: ObservableObject {
             let format = UIGraphicsImageRendererFormat(); format.scale = min(1, 1280 / max(window.bounds.width, window.bounds.height))
             let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) }
             guard let data = image.jpegData(compressionQuality: 0.7) else { throw EWPError.message("Could not capture EWP.") }
-            return [["type": "image", "data": data.base64EncodedString(), "mimeType": "image/jpeg"]]
+            return try MCPServer.text(["source": "app", "screen_sharing_live": false]) + [["type": "image", "data": data.base64EncodedString(), "mimeType": "image/jpeg"]]
         case "configure_esp32":
             guard let id = args["bluetooth_id"] as? String, let ssid = args["ssid"] as? String,
                   let password = args["password"] as? String,
