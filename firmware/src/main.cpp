@@ -49,6 +49,9 @@ uint16_t pairingHandle = BLE_HS_CONN_HANDLE_NONE;
 struct Subscription { uint16_t handle = BLE_HS_CONN_HANDLE_NONE; uint8_t reports = 0; };
 Subscription subscriptions[3];
 volatile int lastDisconnectReason = 0;
+volatile uint32_t connectionsSeen = 0;
+volatile int securityRequestResult = 0;
+volatile int authenticationState = 0;
 
 void setHid(uint16_t handle) {
   portENTER_CRITICAL(&hidMux); hidHandle = handle; portEXIT_CRITICAL(&hidMux);
@@ -112,6 +115,9 @@ void appendStatus(JsonDocument &doc) {
   doc["host_switching"] = true;
   doc["ble_connections"] = NimBLEDevice::getServer()->getConnectedCount();
   doc["last_disconnect_reason"] = lastDisconnectReason;
+  doc["connections_seen"] = connectionsSeen;
+  doc["security_request_result"] = securityRequestResult;
+  doc["authentication_state"] = authenticationState;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["address"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
   if (!selectedId().isEmpty() && getHid() == BLE_HS_CONN_HANDLE_NONE) doc["state"] = "waiting_for_selected_host";
@@ -158,6 +164,7 @@ void acceptSubscribedHost(NimBLEConnInfo &info) {
 }
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
+    ++connectionsSeen; authenticationState = 0;
     if (pairingOpen()) {
       bool accepted;
       portENTER_CRITICAL(&hidMux);
@@ -169,8 +176,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     for (auto &entry : subscriptions) if (entry.handle == BLE_HS_CONN_HANDLE_NONE) {
       entry.handle = info.getConnHandle(); entry.reports = 0; break;
     }
-    server->updateConnParams(info.getConnHandle(), 12, 24, 0, 200);
-    NimBLEDevice::startSecurity(info.getConnHandle());
+    // Let the central negotiate connection parameters during initial pairing.
+    int result = 0;
+    NimBLEDevice::startSecurity(info.getConnHandle(), &result);
+    securityRequestResult = result;
     advertisingNeeded = true;
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
@@ -184,6 +193,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   uint32_t onPassKeyDisplay() override { return passkey; }
   void onAuthenticationComplete(NimBLEConnInfo &info) override {
+    authenticationState = info.isEncrypted() && info.isAuthenticated() ? 1 : -1;
     if (!info.isEncrypted() || !info.isAuthenticated() ||
         (!permittedHost(info) && millis() > provisionUntil))
       NimBLEDevice::getServer()->disconnect(info.getConnHandle());
@@ -220,7 +230,8 @@ class ProvisionCallbacks : public NimBLECharacteristicCallbacks {
 } provisionCallbacks;
 
 void jsonReply(int code, JsonDocument &doc) {
-  String output; serializeJson(doc, output); http.send(code, "application/json", output);
+  String output; serializeJson(doc, output);
+  http.sendHeader("Connection", "close"); http.send(code, "application/json", output);
 }
 bool authorized() {
   String expected = "Bearer " + token, actual = http.header("Authorization");
