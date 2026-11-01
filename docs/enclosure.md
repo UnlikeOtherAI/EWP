@@ -40,6 +40,40 @@ Manufacturer references: [DevKitC V4 dimension drawing](https://dl.espressif.com
 
 The reference PCB thickness (1.6 mm), header housing height (2.5 mm), nominal square pin section (0.64 mm), solder clearance, module height, USB envelope, and LED coordinates are modelling assumptions. Confirm them against the physical board, especially for clones or replacement USB connectors. The case includes the antenna overhang and keeps it free of metal inserts.
 
+## Vertical stack and USB access
+
+The USB opening is computed from the seated PCB, rather than placed independently.
+The standard DevKitC V4 uses Micro-B USB, as identified in the manufacturer's guide.
+Neither that guide nor the plan-view dimension drawing establishes the exposed pin
+length or the exact mating-axis height of this particular board. Those remain explicit
+parameters until measured; the following are the current nominal assumptions.
+
+| Height component / datum | mm above outside bottom |
+| --- | --- |
+| Solid skin below socket | 1.20 |
+| Pin-tip clearance above skin | +0.30 |
+| Metal pin tip | 1.50 |
+| Exposed metal pin length, assumed | +6.00 |
+| Bottom of header plastic | 7.50 |
+| Header plastic spacer, assumed | +2.50 |
+| PCB underside, supported by seats | 10.00 |
+| PCB thickness, assumed | +1.60 |
+| PCB top | 11.60 |
+| USB mating axis above PCB top, assumed | +1.35 |
+| USB opening centre | 12.95 |
+| USB opening bottom / top | 8.75 / 17.15 |
+
+The 14 × 8.4 mm rounded opening clears a moulded cable plug body as well as the
+metal plug. Its tunnel extends through the recessed case wall toward the board's
+socket. This is a clearance allowance, not a measurement of the user's cable.
+Check the real plug body width/height and socket axis before the full print.
+
+Changing `--pin-length`, `--header-height`, `--pcb-thickness`, `--bottom-skin`, or
+`--pin-tip-clearance` moves the PCB seats, reference board, USB aperture and upper
+shell together. `--usb-axis-above-pcb` adjusts the socket-specific mating-axis datum;
+`--usb-opening-width` and `--usb-opening-height` adjust cable-body clearance.
+All calculated heights are saved in `geometry-checks.json`.
+
 ## Print and fit
 
 1. Print a small tolerance coupon first. Choose the square-hole size that accepts both pin rows with a light push. The default is 0.95 mm; the other coupons are 0.85 and 1.05 mm.

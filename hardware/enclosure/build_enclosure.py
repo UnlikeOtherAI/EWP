@@ -19,6 +19,14 @@ parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--pin-hole", type=float, default=0.95, help="Square blind socket side, mm")
 parser.add_argument("--light-x", type=float, default=-22.7, help="Provisional LED aperture X, mm")
 parser.add_argument("--light-y", type=float, default=-5.4, help="Provisional LED aperture Y, mm")
+parser.add_argument("--pin-length", type=float, default=6.0, help="Exposed metal below header plastic, mm; verify on board")
+parser.add_argument("--header-height", type=float, default=2.5, help="Plastic spacer below PCB, mm; verify on board")
+parser.add_argument("--pcb-thickness", type=float, default=1.6)
+parser.add_argument("--bottom-skin", type=float, default=1.2)
+parser.add_argument("--pin-tip-clearance", type=float, default=0.3)
+parser.add_argument("--usb-axis-above-pcb", type=float, default=1.35, help="Mating axis above PCB top, mm; verify socket")
+parser.add_argument("--usb-opening-width", type=float, default=14.0, help="Moulded cable body clearance, mm")
+parser.add_argument("--usb-opening-height", type=float, default=8.4)
 parser.add_argument("--render", action="store_true")
 args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
 out = args.output.resolve()
@@ -26,14 +34,25 @@ out.mkdir(parents=True, exist_ok=True)
 
 # Official Espressif drawing: PCB 48.26 x 27.94, 19 pins per row,
 # 25.40 row separation, 2.54 pitch, 1.29 from USB PCB edge to first pin.
-PCB_L, PCB_W, PCB_T = 48.26, 27.94, 1.60
+PCB_L, PCB_W, PCB_T = 48.26, 27.94, args.pcb_thickness
 PCB_X = -4.50
 ROW_Y = (PCB_W / 2 - 1.30 - 25.40, PCB_W / 2 - 1.30)
 PIN_X = [PCB_X - PCB_L / 2 + 1.29 + i * 2.54 for i in range(19)]
-L, W, H, R = 66.80, 42.80, 22.40, 10.0
-WALL, FLOOR, SEAM = 2.20, 2.20, 17.00
-SEAT_Z = 10.00
-SOCKET_BOTTOM, SOCKET_TOP = 1.20, 7.40
+# Vertical stack from the outer bottom; USB and case height follow the same board datum.
+PIN_LENGTH, HEADER_HEIGHT = args.pin_length, args.header_height
+if min(PIN_LENGTH, HEADER_HEIGHT, PCB_T, args.usb_axis_above_pcb) <= 0 or args.bottom_skin < 1.2 or args.pin_tip_clearance < 0.2:
+    parser.error("Use positive board dimensions, bottom skin >=1.2 mm and tip clearance >=0.2 mm")
+PIN_TIP_Z = args.bottom_skin + args.pin_tip_clearance
+HEADER_BOTTOM_Z = PIN_TIP_Z + PIN_LENGTH
+SEAT_Z = HEADER_BOTTOM_Z + HEADER_HEIGHT
+PCB_TOP_Z = SEAT_Z + PCB_T
+USB_Z = PCB_TOP_Z + args.usb_axis_above_pcb
+L, W, H, R = 66.80, 42.80, PCB_TOP_Z+10.8, 10.0
+WALL, FLOOR, SEAM = 2.20, 2.20, PCB_TOP_Z+5.4
+SOCKET_BOTTOM, SOCKET_TOP = args.bottom_skin, HEADER_BOTTOM_Z-0.1
+USB_OPEN_W, USB_OPEN_H = args.usb_opening_width, args.usb_opening_height
+if USB_OPEN_W < 10 or USB_OPEN_H < 5:
+    parser.error("USB opening must clear the moulded plug body (minimum 10 x 5 mm)")
 LIP_CLEARANCE, LIP_WALL, LIP_DEPTH = 0.20, 1.60, 2.80
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -192,7 +211,7 @@ for x in [-15, 15]:
 
 for part in [base, lid]:
     # A moulded cable can enter the recess; not just the bare metal connector.
-    boolean(part, box("Micro USB cable access", (15, 14, 8.4), (-32.0, 0, 13.45), 1.2))
+    boolean(part, box("Micro USB cable access", (15, USB_OPEN_W, USB_OPEN_H), (-32.0, 0, USB_Z), 1.2))
     part.data.materials.append(olive)
 
 bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.8, depth=10,
@@ -235,12 +254,12 @@ ref(box("Antenna overhang 6.04 - reference", (6.04, 18, 1),
 ref(box("WROOM module approximate height - verify", (19.5, 18, 3.2),
         (PCB_X+10.7, 0, SEAT_Z+PCB_T+1.6)), silver)
 ref(box("Micro USB envelope - verify", (5.8, 7.8, 2.7),
-        (PCB_X-PCB_L/2+1.7, 0, SEAT_Z+PCB_T+1.35)), silver)
+        (PCB_X-PCB_L/2+1.7, 0, USB_Z)), silver)
 for y in ROW_Y:
-    ref(box("Header housing reference", (48.26, 2.54, 2.5),
-            (sum(PIN_X)/19, y, SEAT_Z-1.25)), black)
+    ref(box("Header housing reference", (48.26, 2.54, HEADER_HEIGHT),
+            (sum(PIN_X)/19, y, SEAT_Z-HEADER_HEIGHT/2)), black)
     for x in PIN_X:
-        ref(box("0.64 square header pin reference", (0.64, 0.64, 6), (x, y, SEAT_Z-5.5)), gold)
+        ref(box("0.64 square header pin reference", (0.64, 0.64, PIN_LENGTH), (x, y, HEADER_BOTTOM_Z-PIN_LENGTH/2)), gold)
 
 
 def validate(obj):
@@ -294,6 +313,13 @@ for obj, filename in [(base, "ewp-devkitc-v4-base.stl"), (lid, "ewp-devkitc-v4-l
     "pin_hole_square_side": args.pin_hole, "socket_type": "blind",
     "socket_depth_mm": SOCKET_TOP-SOCKET_BOTTOM, "minimum_bottom_skin_mm": SOCKET_BOTTOM, "case_dimensions": [L, W, H],
     "led_hole_diameter": 1.6, "led_position_provisional": [args.light_x, args.light_y],
+    "height_stack_mm": {"bottom_skin": args.bottom_skin, "pin_tip_clearance": args.pin_tip_clearance,
+                        "exposed_pin_length_assumed": PIN_LENGTH, "header_spacer_height_assumed": HEADER_HEIGHT,
+                        "pin_tip_z": PIN_TIP_Z, "header_bottom_z": HEADER_BOTTOM_Z,
+                        "pcb_underside_z": SEAT_Z, "pcb_thickness_assumed": PCB_T, "pcb_top_z": PCB_TOP_Z,
+                        "usb_axis_above_pcb_assumed": args.usb_axis_above_pcb, "usb_axis_z": USB_Z,
+                        "usb_opening_bottom_z": USB_Z-USB_OPEN_H/2,
+                        "usb_opening_top_z": USB_Z+USB_OPEN_H/2},
     "physical_fit_verified": False, "parts": reports}, indent=2))
 
 # Keep the board reference assembled, and display the removable lid beside the base.
