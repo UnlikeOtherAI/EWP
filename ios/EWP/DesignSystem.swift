@@ -189,8 +189,10 @@ struct InlineError: View {
 }
 
 extension View {
-    /// Centres a screen's content and stops it stretching across an iPad.
+    /// Stops content stretching across an iPad, and keeps its leading edge
+    /// under the navigation title rather than floating in the middle.
     func readableColumn() -> some View {
-        frame(maxWidth: Theme.contentWidth).frame(maxWidth: .infinity)
+        frame(maxWidth: Theme.contentWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

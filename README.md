@@ -37,7 +37,7 @@ xcodegen generate --spec ios/project.yml
 open ios/EWP.xcodeproj
 ```
 
-Allow Bluetooth and Local Network access. EWP creates its own random MCP credential in Keychain and advertises its app endpoint. **Copy MCP access token** copies that credential for the client you are configuring.
+Allow Bluetooth and Local Network access. EWP creates its own random MCP credential in Keychain and advertises its app endpoint. **Copy Agent Prompt** gives you one block of text holding the endpoint, the credential and an instruction to call `help` first; **Send to Another Device** shares the same text through the system share sheet, which is the easiest way to get it from a phone to the computer running your client. The raw credential on its own is under **Advanced → Access**.
 
 Call `start_screen_sharing` over the app's MCP to initiate Apple's screen-broadcast flow. Confirm **Start Broadcast** in the system dialog. This is a request for visible system capture, not silent authorization. Use the screen endpoint for eyes while controlling other apps.
 
@@ -55,7 +55,7 @@ uvx --from platformio==6.1.18 --with pip platformio run --project-dir firmware \
 
 Choose the actual serial port. Use 115200 baud on an unreliable USB link. Preserve existing firmware and settings before replacing a board's software.
 
-For Wi-Fi, choose the nearby keyboard in EWP and enter a 2.4 GHz network name and password. This provisions Wi-Fi only; the ESP32 keeps its own independent MCP token. Alternatively, configure it over USB without installing the app:
+For Wi-Fi, tap **Set Up Keyboard** in EWP and follow the four steps: the app finds the board over Bluetooth, connects, takes a 2.4 GHz network name and password, and then waits for the board to confirm it joined. This provisions Wi-Fi only; the ESP32 keeps its own independent MCP token. Alternatively, configure it over USB without installing the app:
 
 ```sh
 uv run --project tools ewp-setup --port /dev/cu.usbserial-0001 \
@@ -79,8 +79,11 @@ For pointer control on iPhone, enable **Settings → Accessibility → Touch →
 
 ## MCP tools
 
+Every endpoint exposes `help`. It returns what the device is, the order to use its tools in, and what a result does not prove, so a client that arrives with only a URL can orient itself without being told.
+
 | ESP32 tool | Purpose |
 | --- | --- |
+| `help` | What this board is, how to pair and select a target, what `notified` does not mean |
 | `device_status` | Firmware, Wi-Fi, pairing and selected-host state |
 | `list_hosts` | Persisted bonds, optional names and selected/connected state |
 | `start_pairing` | Open a three-minute pairing window; retain existing bonds |
@@ -90,6 +93,7 @@ For pointer control on iPhone, enable **Settings → Accessibility → Touch →
 
 | iOS app tool | Purpose |
 | --- | --- |
+| `help` | What this device is, how to start sharing, where to find the keyboard that types on it |
 | `get_status` | App/server, discovery, nearby keyboards and capture state |
 | `get_screen` | App screen, or shared device screen when capture is live |
 | `start_screen_sharing` | Initiate Apple's broadcast confirmation |
@@ -98,7 +102,7 @@ For pointer control on iPhone, enable **Settings → Accessibility → Touch →
 | `select_esp32` | Select a nearby board for setup |
 | `configure_esp32` | Configure Wi-Fi through encrypted BLE; optionally submit private form values already entered on the device |
 
-The screen endpoint exposes `get_status`, `get_screen` and `stop_screen_sharing`. It rejects frames older than five seconds. It retains only the latest JPEG, at up to 1280 pixels on the longer side and two frames per second; audio is ignored.
+The screen endpoint exposes `help`, `get_status`, `get_screen` and `stop_screen_sharing`. It rejects frames older than five seconds. It retains only the latest JPEG, at up to 1280 pixels on the longer side and two frames per second; audio is ignored.
 
 A successful Bluetooth notification does not prove that the target acted on input. Verify the subsequent screen. Unlocking a locked device and bypassing system capture consent are not implemented.
 
