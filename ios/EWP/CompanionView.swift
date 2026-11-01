@@ -6,6 +6,7 @@ import SwiftUI
 struct CompanionView: View {
     @StateObject private var model = CompanionModel()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showSetup = false
     @State private var poll: Task<Void, Never>?
 
@@ -15,18 +16,38 @@ struct CompanionView: View {
         poll = Task { await model.run() }
     }
 
+    private var isWide: Bool { sizeClass == .regular }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: Theme.cardSpacing) {
-                    SharingCard(model: model)
-                    ConnectionCard(model: model)
-                    KeyboardCard(model: model, showSetup: $showSetup)
+                Group {
+                    if isWide {
+                        // An iPad has room to show the primary action beside
+                        // the two reference cards instead of above them.
+                        // Equal explicit widths: left to negotiate, the columns
+                        // size to their text and long messages get truncated.
+                        HStack(alignment: .top, spacing: Theme.cardSpacing) {
+                            SharingCard(model: model, prominent: true)
+                                .frame(maxWidth: .infinity)
+                            VStack(spacing: Theme.cardSpacing) {
+                                ConnectionCard(model: model)
+                                KeyboardCard(model: model, showSetup: $showSetup)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        VStack(spacing: Theme.cardSpacing) {
+                            SharingCard(model: model)
+                            ConnectionCard(model: model)
+                            KeyboardCard(model: model, showSetup: $showSetup)
+                        }
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 32)
-                .readableColumn()
+                .readableColumn(wide: isWide)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("EWP")
@@ -59,22 +80,23 @@ struct CompanionView: View {
 
 private struct SharingCard: View {
     @ObservedObject var model: CompanionModel
+    var prominent = false
 
     var body: some View {
         Card {
-            VStack(spacing: 14) {
+            VStack(spacing: prominent ? 20 : 14) {
                 emblem
-                VStack(spacing: 5) {
-                    Text(title).font(.title3.weight(.semibold))
+                VStack(spacing: 6) {
+                    Text(title).font(prominent ? .title2.weight(.semibold) : .title3.weight(.semibold))
                     Text(detail)
-                        .font(.subheadline)
+                        .font(prominent ? .body : .subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 action
             }
             .frame(maxWidth: .infinity)
-            .padding(20)
+            .padding(prominent ? 32 : 20)
         }
         .broadcastTrigger(model)
         .animation(.easeInOut(duration: 0.25), value: model.sharing)
@@ -84,16 +106,16 @@ private struct SharingCard: View {
         ZStack {
             Circle()
                 .fill(model.sharing == .live ? Color.red.opacity(0.12) : Color(.tertiarySystemFill))
-                .frame(width: 60, height: 60)
+                .frame(width: prominent ? 84 : 60, height: prominent ? 84 : 60)
             switch model.sharing {
             case .off:
                 Image(systemName: "rectangle.on.rectangle")
-                    .font(.system(size: 24, weight: .regular))
+                    .font(.system(size: prominent ? 34 : 24, weight: .regular))
                     .foregroundStyle(.secondary)
             case .requesting:
                 ProgressView()
             case .live:
-                StatusDot(color: .red, pulsing: true).scaleEffect(1.6)
+                StatusDot(color: .red, pulsing: true).scaleEffect(prominent ? 2.2 : 1.6)
             }
         }
         .accessibilityHidden(true)
@@ -178,7 +200,11 @@ private struct ConnectionCard: View {
         case .unavailable(let reason):
             VStack(alignment: .leading, spacing: 8) {
                 StatusLabel(text: "Not reachable", color: .orange)
-                Text(reason).font(.footnote).foregroundStyle(.secondary)
+                // Without this a narrow column truncates instead of wrapping.
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button("Try Again") { model.retry() }
                     .font(.subheadline.weight(.semibold))
             }

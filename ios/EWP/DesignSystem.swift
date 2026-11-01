@@ -5,8 +5,10 @@ import SwiftUI
 enum Theme {
     /// Matches the AccentColor asset so system controls and custom views agree.
     static let accent = Color("AccentColor")
-    /// iPad and large iPhones keep a readable measure instead of stretching.
+    /// A single column of cards keeps a readable measure instead of stretching.
     static let contentWidth: CGFloat = 640
+    /// Two columns side by side on an iPad.
+    static let wideContentWidth: CGFloat = 1000
     static let cardRadius: CGFloat = 16
     static let rowSpacing: CGFloat = 14
     static let cardSpacing: CGFloat = 18
@@ -177,7 +179,9 @@ struct InlineError: View {
                     .foregroundStyle(.orange)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(message).font(.subheadline)
+                    Text(message)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
                     if let retry {
                         Button("Try Again", action: retry)
                             .font(.subheadline.weight(.semibold))
@@ -191,8 +195,8 @@ struct InlineError: View {
 extension View {
     /// Stops content stretching across an iPad, and keeps its leading edge
     /// under the navigation title rather than floating in the middle.
-    func readableColumn() -> some View {
-        frame(maxWidth: Theme.contentWidth, alignment: .leading)
+    func readableColumn(wide: Bool = false) -> some View {
+        frame(maxWidth: wide ? Theme.wideContentWidth : Theme.contentWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
