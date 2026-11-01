@@ -16,7 +16,7 @@ from mathutils import Vector
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--output", type=Path, required=True)
-parser.add_argument("--pin-hole", type=float, default=0.95, help="Square passage side, mm")
+parser.add_argument("--pin-hole", type=float, default=0.95, help="Square blind socket side, mm")
 parser.add_argument("--light-x", type=float, default=-22.7, help="Provisional LED aperture X, mm")
 parser.add_argument("--light-y", type=float, default=-5.4, help="Provisional LED aperture Y, mm")
 parser.add_argument("--render", action="store_true")
@@ -30,9 +30,10 @@ PCB_L, PCB_W, PCB_T = 48.26, 27.94, 1.60
 PCB_X = -4.50
 ROW_Y = (PCB_W / 2 - 1.30 - 25.40, PCB_W / 2 - 1.30)
 PIN_X = [PCB_X - PCB_L / 2 + 1.29 + i * 2.54 for i in range(19)]
-L, W, H, R = 66.80, 42.80, 17.20, 10.0
-WALL, FLOOR, SEAM = 2.20, 2.20, 11.80
-SEAT_Z = 4.80
+L, W, H, R = 66.80, 42.80, 22.40, 10.0
+WALL, FLOOR, SEAM = 2.20, 2.20, 17.00
+SEAT_Z = 10.00
+SOCKET_BOTTOM, SOCKET_TOP = 1.20, 7.40
 LIP_CLEARANCE, LIP_WALL, LIP_DEPTH = 0.20, 1.60, 2.80
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -136,15 +137,15 @@ def combine_cutters(name, objects):
     return result
 
 
-def pin_cutters(centers, hole, floor=FLOOR):
+def pin_cutters(centers, hole):
     cutters = []
     for i, (x, y) in enumerate(centers):
         # The upper 0.55 mm is a lead-in; the rest locates a nominal 0.64 mm square pin.
         rings = []
-        for z, side in [(-0.4, hole), (floor-0.55, hole), (floor+0.02, hole+0.65), (floor+0.4, hole+0.65)]:
+        for z, side in [(SOCKET_BOTTOM, hole), (SOCKET_TOP-0.55, hole), (SOCKET_TOP+0.02, hole+0.65), (SOCKET_TOP+0.4, hole+0.65)]:
             rings.append([(x+a*side/2, y+b*side/2, z) for a, b in [(-1,-1),(1,-1),(1,1),(-1,1)]])
-        cutters.append(loft(f"Pin passage {i+1}", rings))
-    return combine_cutters("All pin passage cutters", cutters)
+        cutters.append(loft(f"Blind pin socket {i+1}", rings))
+    return combine_cutters("All blind socket cutters", cutters)
 
 
 base_levels = []
@@ -162,6 +163,10 @@ for x in [PCB_X-12, PCB_X+12]:
         # Insulating seats are inside the header rows, clear of the plastic housings.
         boolean(base, box("PCB edge seat", (5.8, 1.55, SEAT_Z-FLOOR+0.25),
                           (x, y, (FLOOR+SEAT_Z)/2-0.125), 0.25), "UNION")
+# Raised rails contain the full pin length; socket bottoms stop above the exterior.
+for y in ROW_Y:
+    boolean(base, box("Blind socket rail", (49.8, 3.4, SOCKET_TOP-FLOOR+0.3),
+                      (sum(PIN_X)/19, y, (FLOOR+SOCKET_TOP)/2-0.15), 0.25), "UNION")
 boolean(base, pin_cutters([(x, y) for y in ROW_Y for x in PIN_X], args.pin_hole))
 
 lid_levels = [(SEAM, L-0.1, W-0.1, R-0.05)]
@@ -187,7 +192,7 @@ for x in [-15, 15]:
 
 for part in [base, lid]:
     # A moulded cable can enter the recess; not just the bare metal connector.
-    boolean(part, box("Micro USB cable access", (15, 14, 8.4), (-32.0, 0, 8.25), 1.2))
+    boolean(part, box("Micro USB cable access", (15, 14, 8.4), (-32.0, 0, 13.45), 1.2))
     part.data.materials.append(olive)
 
 bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.8, depth=10,
@@ -195,13 +200,13 @@ bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.8, depth=10,
 boolean(lid, bpy.context.object)
 
 # A complete grid coupon checks both header rows and all 19 positions before a long print.
-coupon = box("38 pin fit coupon - PRINT", (51.5, 29.8, FLOOR), (PCB_X, 0, FLOOR/2), 0.5)
+coupon = box("38 pin fit coupon - PRINT", (51.5, 29.8, SOCKET_TOP), (PCB_X, 0, SOCKET_TOP/2), 0.5)
 boolean(coupon, pin_cutters([(x, y) for y in ROW_Y for x in PIN_X], args.pin_hole))
 coupon.data.materials.append(olive)
 
 mini_coupons = []
 for hole in [0.85, 0.95, 1.05]:
-    part = box(f"Tolerance coupon {hole:.2f} - PRINT", (12, 29.8, FLOOR), (0, 0, FLOOR/2), 0.4)
+    part = box(f"Tolerance coupon {hole:.2f} - PRINT", (12, 29.8, SOCKET_TOP), (0, 0, SOCKET_TOP/2), 0.4)
     boolean(part, pin_cutters([(x, y) for y in ROW_Y for x in [-3.81, -1.27, 1.27, 3.81]], hole))
     part.data.materials.append(olive)
     mini_coupons.append(part)
@@ -286,7 +291,8 @@ for obj, filename in [(base, "ewp-devkitc-v4-base.stl"), (lid, "ewp-devkitc-v4-l
 
 (out/"geometry-checks.json").write_text(json.dumps({
     "units": "mm", "pin_count": 38, "pin_pitch": 2.54, "row_spacing": 25.40,
-    "pin_hole_square_side": args.pin_hole, "case_dimensions": [L, W, H],
+    "pin_hole_square_side": args.pin_hole, "socket_type": "blind",
+    "socket_depth_mm": SOCKET_TOP-SOCKET_BOTTOM, "minimum_bottom_skin_mm": SOCKET_BOTTOM, "case_dimensions": [L, W, H],
     "led_hole_diameter": 1.6, "led_position_provisional": [args.light_x, args.light_y],
     "physical_fit_verified": False, "parts": reports}, indent=2))
 
