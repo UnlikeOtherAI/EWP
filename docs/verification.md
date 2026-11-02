@@ -329,3 +329,70 @@ handoff and it is not implemented.
 Also unverified: mDNS recovery after a Wi-Fi drop uses the same end-and-begin
 pattern that was just fixed for renames, and was not exercised. `identify`
 has no LED on this board. Nothing has been tested with more than one board.
+
+### What the Bluetooth chain does and does not do, 2 November 2026
+
+The board was reached over USB serial and over BLE from the Mac. Everything up
+to the bond is verified; nothing past it is, and the reason is structural
+rather than a bug.
+
+| Check | How | Result |
+| --- | --- | --- |
+| Board is alive | USB serial `status` on `/dev/cu.usbserial-0001` | `ewp-0cb815c55dc4`, named `Bench 1`, firmware 0.3.0, 8 bond slots, none used. |
+| Bonds ever made | Same | `saved_hosts: 0`. No host has ever paired with this board. |
+| Advertising | 25 s CoreBluetooth scan with duplicates, from a signed app bundle | 81 packets. Appearance `0x03C1` (keyboard), services `0x1812` (HID over GATT) and the EWP service. |
+| Advertised name | Same | 79 of 81 packets carried `LocalName` `EWP Bench 1`, which is what `start_pairing` would tell a person to look for. |
+| One board, not two | Held the USB board in reset over DTR/RTS and rescanned | The advertisement disappeared, so the single advertiser is this board. |
+| GATT | Connected without requesting a bond and enumerated | Device Information, Battery, and the EWP service with its write and notify characteristics. |
+
+Two things that look like faults and are not. The advertising packet itself
+carries no name: flags, the 128-bit EWP service, `0x1812` and the appearance
+come to 29 of its 31 bytes, so the name rides in the scan response, which is
+where an active scanner reads it. And `0x1812` does not appear in the GATT
+enumeration above because macOS reserves HID for its own stack and hides it
+from third-party apps, so that enumeration is no evidence either way.
+
+One thing that is worth knowing. macOS reports this board's cached name as
+`ewp-c515b80c`, an identifier from an earlier firmware, and that stale cache
+is why `~/.config/ewp` holds credential files under two identifiers for what
+is one board.
+
+#### Why the rest cannot run yet
+
+`press_key` is an MCP call, so it needs the board's HTTP endpoint, so it needs
+Wi-Fi. Wi-Fi is provisioned over the BLE characteristic, and the firmware
+refuses that write unless the link `isAuthenticated()` and `isEncrypted()`:
+
+    if (!info.isAuthenticated() || !info.isEncrypted() || !setupOpen()) return;
+
+So the bond comes first and everything else follows it. With no bond there is
+no Wi-Fi, with no Wi-Fi there is no MCP endpoint, and `start_pairing`,
+`select_host` and `press_key` cannot be called at all. The board is not on
+Wi-Fi now: `wifi_connected: false`, no address.
+
+Bonding needs a person, by design. The board sets
+`setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` with bonding, MITM and Secure
+Connections, so the host asks for a passkey the board is supposed to be
+displaying. It has no display, so the code reaches a person only through the
+serial console or a printed label. Connecting from the Mac during this check
+raised exactly that prompt.
+
+#### A keyboard that asks for a passcode is the wrong way round
+
+Ordinary Bluetooth keyboards either pair Just Works or have the host show
+digits that are typed on the keyboard. This board can do neither: it has no
+screen to show a code and no keys to type one on. The consequence is a label
+per board, and on a wall of two hundred that is two hundred labels and no
+phone-only setup, which is the same dead end recorded above as P3.
+
+`BLE_HS_IO_NO_INPUT_OUTPUT` without MITM would pair the way a keyboard
+actually does, inside the 180 s window that `start_pairing` already opens. It
+is not a free change: `isAuthenticated()` is false for a Just Works bond, so
+the Wi-Fi provisioning gate quoted above would have to drop to `isEncrypted()`
+and lean on that window instead. That trades MITM protection during pairing
+for setup that works from a phone. It is an owner's decision, not a defect,
+and it is not made here.
+
+Counters such as `connections_seen` cannot be read after the fact over the
+same cable: opening the serial port resets the ESP32, so every reading of them
+in this check was taken from a board that had just rebooted.
