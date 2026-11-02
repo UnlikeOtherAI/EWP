@@ -59,7 +59,12 @@ def main():
             raise ValueError('Invalid device access response')
         output = Path(args.output_dir).expanduser()
         private_write(output / (device + '.token'), token)
-        private_write(output / (device + '.pin'), str(access['pairing_code']).zfill(6))
+        # Pairing takes no code any more, so there is no PIN to save. The
+        # setup code is kept for the encrypted provisioning scheme that is not
+        # built yet, and older firmware still calls it pairing_code.
+        setup_code = access.get('setup_code', access.get('pairing_code'))
+        if setup_code is not None:
+            private_write(output / (device + '.setup-code'), str(setup_code).zfill(6))
         if args.name:
             named = request(port, {'method': 'set_name', 'name': args.name}, 'name')
             print('Name:', named['name'])
@@ -78,7 +83,8 @@ def main():
         if not args.name and not access.get('name'):
             print('No name set. Pass --name to label this board.')
         print('MCP credential saved privately:', output / (device + '.token'))
-        print('Pairing PIN saved privately:', output / (device + '.pin'))
+        if setup_code is not None:
+            print('Setup code saved privately:', output / (device + '.setup-code'))
 
 
 if __name__ == '__main__':

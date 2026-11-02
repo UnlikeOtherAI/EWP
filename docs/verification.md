@@ -396,3 +396,46 @@ and it is not made here.
 Counters such as `connections_seen` cannot be read after the fact over the
 same cable: opening the serial port resets the ESP32, so every reading of them
 in this check was taken from a board that had just rebooted.
+
+### Pairing the way a keyboard pairs, 2 November 2026
+
+The board no longer asks a host for a passkey. `BLE_HS_IO_DISPLAY_ONLY` with
+MITM meant the host prompted for a code the board was supposed to be showing,
+and it has no screen, so the code reached a person only over USB or on a
+printed label: two hundred labels for a wall, and no setup from a phone.
+
+| Change | Before | After |
+| --- | --- | --- |
+| IO capability | `BLE_HS_IO_DISPLAY_ONLY`, MITM on | `BLE_HS_IO_NO_INPUT_OUTPUT`, MITM off, bonding and Secure Connections kept |
+| `onAuthenticationComplete` | Disconnected any link that was not `isAuthenticated()` | Requires `isEncrypted()` only |
+| Wi-Fi provisioning write | `isAuthenticated() && isEncrypted() && setupOpen()` | `isEncrypted() && setupOpen()` |
+| Pairing window | 5 minutes after boot, only with zero bonds | Always open while there are zero bonds; otherwise a 180 s `start_pairing` window |
+| Provisioning window | 5 minutes after boot | Open while Wi-Fi is not connected |
+| `start_pairing` result | Returned a fresh `pairing_code` | No code; the response says so and the tool text matches |
+| Serial `access` | `pairing_code` | `setup_code`, kept in NVS for the encrypted provisioning scheme that is not built yet, and no longer printed at boot |
+
+A Just Works bond is encrypted but never authenticated, so the two
+`isAuthenticated()` gates would have dropped every bond the instant it
+completed. Timing matters as much: `start_pairing` is an MCP call, MCP needs
+Wi-Fi, and Wi-Fi arrives over a bonded link, so a board with nothing paired
+could never have its window opened by any means except a power cycle.
+
+| Check | How | Result |
+| --- | --- | --- |
+| Flash backed up first | `esptool read-flash 0 0x400000` | 4194304 bytes saved before anything was written. |
+| Builds | `pio run` | Succeeds. Flash 86.8% of 1310720 bytes, RAM 18.2%. |
+| Flashes and comes back | `pio run -t upload`, then serial `status` | `ewp-0cb815c55dc4`, still named `Bench 1`, token and NVS intact, `pairing_open: true`. |
+| No passkey prompt | Connected from the Mac over BLE | The macOS passkey dialog that this same connection raised before the change did not appear. |
+| Board still asks to pair | Serial `status` read live, without resetting the board | `connections_seen` 0 to 1 and `security_request_result: 0`, so `startSecurity()` was called and returned success. |
+
+Not verified: no bond has been completed, so nothing past it has been either.
+`authentication_state` stayed 0 and `saved_hosts` stayed 0 on that attempt.
+This Mac is the wrong host to judge it on, because it still holds a stale bond
+for this board's address under the old identifier `ewp-c515b80c` while the
+board's own store is empty, and a host with keys the device has forgotten
+gives up rather than re-pairing. The clean test is a phone that has never seen
+this board.
+
+Reading these counters needs care: opening the serial port normally resets the
+ESP32 and zeroes them, so the readings above were taken over a connection
+opened with DTR and RTS held low.

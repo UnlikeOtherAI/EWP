@@ -64,12 +64,12 @@ uv run --project tools ewp-setup --port /dev/cu.usbserial-0001 \
 
 The private JSON file contains `ssid` and `password` strings and must have mode `600` on macOS/Linux. Keep it outside the repository. The setup client boots the application through the CP2102 reset lines, provisions the board, saves its MCP token and pairing PIN privately under `~/.config/ewp/`, and exits. Running it without `--wifi-file` retrieves access information without changing Wi-Fi. It is a one-time setup tool, not a runtime dependency.
 
-BLE Wi-Fi setup is authenticated and encrypted and opens for five minutes after reset. The board generates and retains its own MCP token in NVS. Neither ordinary boot logs nor mDNS contain that token.
+BLE Wi-Fi setup is encrypted and stays open while the board has no Wi-Fi to lose, because a board that never joined is otherwise unreachable. A board with no bonds likewise stays pairable; once one host is bonded only a 180-second `start_pairing` window lets another in. The board generates and retains its own MCP token in NVS. Neither ordinary boot logs nor mDNS contain that token.
 
 ## Pairing and switching targets
 
 1. Call the ESP32's `start_pairing`, optionally with a name for the new target. Existing bonds stay saved. Input stops while a new target is being paired.
-2. In the target's Bluetooth settings, pair the Bluetooth name that call returned — **EWP _name_**, or **EWP _last six MAC digits_** on a board that has not been named — using the `pairing_code` from that same call. Each pairing window issues a fresh code, so an earlier one will not work. This needs no EWP app on the target.
+2. In the target's Bluetooth settings, tap the Bluetooth name that call returned — **EWP _name_**, or **EWP _last six MAC digits_** on a board that has not been named. There is no code to enter: the board pairs the way any keyboard does, since it has no screen to show a code on and no keys to type one with. This needs no EWP app on the target.
 3. Call `list_hosts` to see saved host IDs. They come from the bonded identity address, not a rotating Bluetooth address or a list position.
 4. Call `select_host` with the saved `host_id`; optionally pass `name` to label an existing bond. The ESP32 reserves input for that target and advertises with a connection allowlist. Poll `device_status` until that host subscribes before sending input.
 

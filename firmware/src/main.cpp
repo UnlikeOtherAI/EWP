@@ -40,7 +40,9 @@ char pairingExcluded[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
 String pendingHostName, lastError;
 struct HostEvent { char id[32]; };
 QueueHandle_t hostEvents;
-uint32_t passkey, setupCode;
+// Persisted under the NVS key "passkey" from when it was one, so a board
+// that already has a value keeps it.
+uint32_t setupCode;
 uint32_t provisionUntil;
 volatile bool storeFull = false;
 uint32_t inputSequence = 0;
@@ -77,8 +79,22 @@ void reserveHost(const String &id) {
 }
 // millis() wraps after 49.7 days, so every window is a signed difference; an
 // unsigned comparison leaves the window stuck open after the wrap.
-bool pairingOpen() { return static_cast<int32_t>(pairingUntil - millis()) > 0; }
-bool setupOpen() { return static_cast<int32_t>(provisionUntil - millis()) > 0; }
+// A board with no bond is a keyboard still in its box, and it stays pairable
+// for as long as that is true. A timer cannot be right here: start_pairing is
+// an MCP call, MCP needs Wi-Fi, and Wi-Fi arrives over a bonded link, so a
+// board that has been powered for an hour with nothing paired would have no
+// way back in short of a power cycle. Once anything is bonded the window is
+// the only way in, and a power blip no longer offers a wall of boards to the
+// room.
+bool pairingOpen() {
+  return NimBLEDevice::getNumBonds() == 0 || static_cast<int32_t>(pairingUntil - millis()) > 0;
+}
+// Provisioning stays open while there is no Wi-Fi to lose, for the same
+// reason: a board that never joined, or whose password changed, is otherwise
+// unreachable. It still takes an encrypted link and a bond slot.
+bool setupOpen() {
+  return !WiFi.isConnected() || static_cast<int32_t>(provisionUntil - millis()) > 0;
+}
 bool identifyOpen() { return static_cast<int32_t>(identifyUntil - millis()) > 0; }
 String displayName() { return deviceName.isEmpty() ? deviceId : deviceName; }
 // Both the operator and the agent need to tell sibling boards apart, and the
@@ -151,7 +167,7 @@ void appendHelp(JsonDocument &doc) {
   auto steps = doc["getting_started"].to<JsonArray>();
   steps.add("Call device_status to see Wi-Fi state, saved bonds and which host is selected.");
   steps.add("Call list_hosts for the bonds this board has saved. Each host_id is stable across reconnections and reboots.");
-  steps.add("To add a target: call start_pairing, then a person pairs the Bluetooth name it returns in that target's own Bluetooth settings using the returned pairing_code. The board cannot pair on its own.");
+  steps.add("To add a target: call start_pairing, then a person taps the Bluetooth name it returns in that target's own Bluetooth settings. There is no code to enter. The board cannot pair on its own.");
   steps.add("Call select_host to reserve input for one saved host, then poll device_status until hid_connected is true before sending input.");
   steps.add("Use press_key and move_pointer, passing that same host_id, to type and click.");
   steps.add("Call set_name to label this board, and identify when a person needs to find it among boards that look alike.");
@@ -161,7 +177,7 @@ void appendHelp(JsonDocument &doc) {
   care.add("Pass request_id on anything that changes state, and reuse the same value when you retry after a timeout. The last eight results are replayed instead of acted on twice.");
   care.add(String("This board holds ") + CONFIG_BT_NIMBLE_MAX_BONDS + " bonds and never deletes one by itself. When it is full, or store_full is true because the hosts' subscriptions filled its store, start_pairing fails; call forget_host to free a slot.");
   care.add("forget_host removes only this board's side of a bond. The target keeps its own until a person removes it there, and until then it fails to reconnect.");
-  care.add("start_pairing issues a new pairing_code each time, so a code from an earlier call no longer works. The code printed on the board itself is for Wi-Fi setup and a first pairing only.");
+  care.add("Pairing takes no code. A board with no bonds stays pairable so it can be set up at all; once one host is bonded, only a start_pairing window lets another in, and it lasts 180 seconds.");
   doc["seeing_the_screen"] = "This board has no camera or screen access. If the target is an iPhone or iPad running EWP, browse _mcp._tcp.local. for a service whose role TXT record is 'app' on the same device, and use its get_screen tool.";
   doc["discovery"] = "This endpoint advertises _mcp._tcp.local. with TXT records id, name, role, path and fw. The name record falls back to the id until set_name is called. Credentials are never advertised.";
 }
@@ -192,16 +208,10 @@ bool beginPairing(JsonDocument &out) {
   portENTER_CRITICAL(&hidMux); memcpy(pairingExcluded, excluded, sizeof(excluded)); portEXIT_CRITICAL(&hidMux);
   setHid(BLE_HS_CONN_HANDLE_NONE);
   portENTER_CRITICAL(&hidMux); pairingHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
-  // Secure Connections passkey entry leaks a reused passkey across attempts,
-  // so each window gets its own code. loop() restores the setup code when the
-  // window closes, because that is the one printed on the board's label.
-  passkey = 100000 + esp_random() % 900000;
-  NimBLEDevice::setSecurityPasskey(passkey);
   pairingUntil = millis()+180000;
   for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
   advertisingNeeded = true;
   out["pairing_open"] = true; out["name"] = keyboardName; out["expires_seconds"] = 180;
-  out["pairing_code"] = passkey;
   return true;
 }
 bool chooseHost(const String &id, JsonDocument &out) {
@@ -330,10 +340,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     portEXIT_CRITICAL(&hidMux);
     advertisingNeeded = true;
   }
-  uint32_t onPassKeyDisplay() override { return passkey; }
   void onAuthenticationComplete(NimBLEConnInfo &info) override {
-    authenticationState = info.isEncrypted() && info.isAuthenticated() ? 1 : -1;
-    if (!info.isEncrypted() || !info.isAuthenticated()) {
+    // Encrypted, not authenticated: a Just Works bond is never the latter, so
+    // requiring it here dropped every bond the moment it completed.
+    authenticationState = info.isEncrypted() ? 1 : -1;
+    if (!info.isEncrypted()) {
       NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
     }
     if (parkedPeer(info)) {
@@ -376,7 +387,9 @@ class ProvisionCallbacks : public NimBLECharacteristicCallbacks {
     auto value = characteristic->getValue();
     // Drop sensitive data from the readable characteristic immediately.
     characteristic->setValue("");
-    if (!info.isAuthenticated() || !info.isEncrypted() || !setupOpen()) return;
+    // Encryption and the setup window, not authentication: see the pairing
+    // decision above. The window is what bounds who can write this.
+    if (!info.isEncrypted() || !setupOpen()) return;
     if (value.size() > 512 || deserializeJson(doc, value.c_str(), value.size())) return;
     String ssid = doc["ssid"] | "", password = doc["password"] | "";
     if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 64) return;
@@ -456,7 +469,7 @@ void handleMCP() {
     addTool(tools, "help", prefix + "Explain what this device is, how to pair and select a target, and what its results do and do not prove. Call this first.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "device_status", prefix + "Read this keyboard's name, Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "list_hosts", prefix + "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
-    addTool(tools, "start_pairing", prefix + "Disconnect input and advertise for a new host. Existing bonds stay saved. Pair the returned Bluetooth name in the target's own Bluetooth settings, with the pairing_code from this call and no earlier one.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
+    addTool(tools, "start_pairing", prefix + "Disconnect input and advertise for a new host for 180 seconds. Existing bonds stay saved. Pair the returned Bluetooth name in the target's own Bluetooth settings; there is no code to enter.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "cancel_pairing", prefix + "Close the pairing window now and go back to advertising for the selected host.", R"({"type":"object","properties":{"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "select_host", prefix + "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
     addTool(tools, "forget_host", prefix + "Delete one saved bond to free a slot. Pass confirm with this board's id. The target keeps its own bond until a person removes it there.", R"({"type":"object","properties":{"host_id":{"type":"string"},"confirm":{"type":"string"},"request_id":{"type":"string","maxLength":64}},"required":["host_id","confirm"],"additionalProperties":false})");
@@ -572,11 +585,10 @@ void setup() {
   deviceName = preferences.getString("name", "");
   setupCode = preferences.getUInt("passkey", 0);
   if (!setupCode) { setupCode = 100000 + esp_random() % 900000; preferences.putUInt("passkey", setupCode); }
-  passkey = setupCode;
-  // The setup code is physical setup data, and it only covers Wi-Fi setup and a
-  // first pairing; start_pairing issues its own code. Never print Wi-Fi
-  // credentials or bridge tokens.
-  Serial.printf("\nEWP %s\nBluetooth setup code: %06u\n", deviceId.c_str(), setupCode);
+  // Kept in NVS for the encrypted provisioning scheme, which is not built
+  // yet. It pairs nothing now, so it is not printed: a code on the console
+  // that no prompt ever asks for only sends a person looking for the prompt.
+  Serial.printf("\nEWP %s\n", deviceId.c_str());
   provisionUntil = millis() + 300000;
   configurationQueue = xQueueCreate(1, sizeof(Configuration));
   hostEvents = xQueueCreate(1, sizeof(HostEvent));
@@ -601,9 +613,14 @@ void setup() {
   for (int i=0; i<NimBLEDevice::getNumBonds(); ++i)
     if (hostId(NimBLEDevice::getBondedAddress(i)) == selectedId()) selectedBonded = true;
   if (!selectedBonded) clearSelection("selected_host_missing");
-  NimBLEDevice::setSecurityAuth(true, true, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
-  NimBLEDevice::setSecurityPasskey(passkey);
+  // A keyboard pairs the way a keyboard pairs: with no code. DISPLAY_ONLY
+  // asked the host for a passkey this board has no screen to show and no keys
+  // to type, so the code reached a person only over USB or on a printed
+  // label, and a wall of boards could not be set up from a phone at all.
+  // Bonding and Secure Connections stay; what is given up is MITM protection
+  // during pairing, bounded by the window above.
+  NimBLEDevice::setSecurityAuth(true, false, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   auto server = NimBLEDevice::createServer(); server->setCallbacks(&serverCallbacks);
   auto hid = new NimBLEHIDDevice(server);
   keyboard = hid->getInputReport(1); mouse = hid->getInputReport(2);
@@ -637,7 +654,7 @@ void serialSetup() {
     JsonDocument request, reply;
     if (!deserializeJson(request, line)) {
       String method = request["method"] | "";
-      if (method == "access") { reply["id"] = deviceId; reply["token"] = token; reply["pairing_code"] = passkey; reply["name"] = deviceName; }
+      if (method == "access") { reply["id"] = deviceId; reply["token"] = token; reply["setup_code"] = setupCode; reply["name"] = deviceName; }
       else if (method == "set_name") {
         if (!request["name"].is<String>()) reply["error"] = "A name string is required";
         else persistName(request["name"].as<String>(), reply);
@@ -668,10 +685,7 @@ void loop() {
   }
   static bool wasPairing = false;
   bool open = pairingOpen();
-  if (wasPairing != open) {
-    if (!open) { passkey = setupCode; NimBLEDevice::setSecurityPasskey(setupCode); }
-    advertisingNeeded = true; wasPairing = open;
-  }
+  if (wasPairing != open) { advertisingNeeded = true; wasPairing = open; }
   static bool wasIdentifying = false;
   bool identifying = identifyOpen();
   if (wasIdentifying != identifying) { wasIdentifying = identifying; applyAdvertisedName(); }
