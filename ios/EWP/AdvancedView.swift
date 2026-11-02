@@ -39,7 +39,7 @@ struct AdvancedView: View {
             .padding(.bottom, 32)
             .readableColumn()
         }
-        .background(Color(.systemGroupedBackground))
+        .signalBackground()
         .navigationTitle("Advanced")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -68,11 +68,11 @@ private struct MenuRow<Destination: View>: View {
                     Text(title).foregroundStyle(.primary)
                     Spacer(minLength: 8)
                     if let detail {
-                        Text(detail).foregroundStyle(.secondary)
+                        Text(detail).foregroundStyle(Theme.subtle)
                     }
                     Image(systemName: "chevron.right")
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.subtle.opacity(0.65))
                         .accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())
@@ -95,7 +95,7 @@ private struct DetailScreen<Content: View>: View {
                 .padding(.bottom, 32)
                 .readableColumn()
         }
-        .background(Color(.systemGroupedBackground))
+        .signalBackground()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -196,7 +196,7 @@ private struct NetworkView: View {
                         HStack(spacing: 10) {
                             if model.discovery.isSearching { ProgressView() }
                             Text(model.discovery.isSearching ? "Looking for devices…" : "No other devices found.")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.subtle)
                         }
                     }
                 } else {
@@ -207,25 +207,25 @@ private struct NetworkView: View {
                             CardRow(divider: true) {
                                 HStack(spacing: 12) {
                                     Image(systemName: device.isKeyboard ? "keyboard" : "ipad.and.iphone")
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(Theme.subtle)
                                         .frame(width: 24)
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(device.title).foregroundStyle(.primary).lineLimit(1)
                                         Text(device.roles.joined(separator: " · "))
                                             .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(Theme.subtle)
                                     }
                                     Spacer(minLength: 8)
                                     if model.remote.hasToken(for: device.id) {
                                         Image(systemName: "key.fill")
                                             .font(.caption)
-                                            .foregroundStyle(.tertiary)
+                                            .foregroundStyle(Theme.subtle.opacity(0.65))
                                             .accessibilityLabel("Access token saved")
                                     }
                                     Image(systemName: "chevron.right")
                                         .font(.footnote.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(Theme.subtle.opacity(0.65))
                                         .accessibilityHidden(true)
                                 }
                                 .contentShape(Rectangle())
@@ -253,7 +253,7 @@ private struct NetworkView: View {
                                     Text(device.title).foregroundStyle(.primary).lineLimit(1)
                                     Text(device.id)
                                         .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(Theme.subtle)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
                                 }

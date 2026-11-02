@@ -27,7 +27,7 @@ struct DeviceDetailView: View {
             .padding(.bottom, 32)
             .readableColumn()
         }
-        .background(Color(.systemGroupedBackground))
+        .signalBackground()
         .navigationTitle(device.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { draft = device.givenName ?? "" }

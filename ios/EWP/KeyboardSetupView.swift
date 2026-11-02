@@ -19,7 +19,7 @@ struct KeyboardSetupView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Put the keyboard on the same Wi-Fi as this device. You only do this once.")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.subtle)
                         .padding(.bottom, 24)
 
                     StepView(number: 1, title: "Find the keyboard", state: findState, isLast: false) {
@@ -28,7 +28,7 @@ struct KeyboardSetupView: View {
                     StepView(number: 2, title: "Connect", state: connectState, isLast: false) {
                         if case .failed(let reason) = phase {
                             VStack(alignment: .leading, spacing: 10) {
-                                Text(reason).font(.footnote).foregroundStyle(.secondary)
+                                Text(reason).font(.footnote).foregroundStyle(Theme.subtle)
                                 Button("Try Again") { model.provisioning.rescan() }
                                     .font(.subheadline.weight(.semibold))
                             }
@@ -40,14 +40,14 @@ struct KeyboardSetupView: View {
                     StepView(number: 4, title: "Join Wi-Fi", state: joinState, isLast: true) {
                         if joinState == .busy {
                             Text("Usually under 20 seconds.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(Theme.subtle)
                         }
                     }
                 }
                 .padding(20)
                 .readableColumn()
             }
-            .background(Color(.systemGroupedBackground))
+            .signalBackground()
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Set Up Keyboard")
             .navigationBarTitleDisplayMode(.inline)
@@ -73,10 +73,10 @@ struct KeyboardSetupView: View {
     @ViewBuilder private var findBody: some View {
         switch phase {
         case .bluetoothOff:
-            Text(phase.message).font(.footnote).foregroundStyle(.secondary)
+            Text(phase.message).font(.footnote).foregroundStyle(Theme.subtle)
         case .bluetoothDenied:
             VStack(alignment: .leading, spacing: 10) {
-                Text(phase.message).font(.footnote).foregroundStyle(.secondary)
+                Text(phase.message).font(.footnote).foregroundStyle(Theme.subtle)
                 Button("Open Settings") {
                     if let url = URL(string: UIApplication.openSettingsURLString) {
                         UIApplication.shared.open(url)
@@ -86,7 +86,7 @@ struct KeyboardSetupView: View {
             }
         case .scanning:
             Text("Make sure the keyboard has power. It accepts setup for five minutes after it starts.")
-                .font(.footnote).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(Theme.subtle)
         case .found:
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(model.provisioning.nearby, id: \.identifier) { device in
@@ -98,11 +98,11 @@ struct KeyboardSetupView: View {
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(Theme.subtle.opacity(0.65))
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .background(Color(.secondarySystemGroupedBackground))
+                        .background(Theme.card)
                         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -110,7 +110,7 @@ struct KeyboardSetupView: View {
             }
         default:
             if let name = model.provisioning.selectedName {
-                Text(name).font(.footnote).foregroundStyle(.secondary)
+                Text(name).font(.footnote).foregroundStyle(Theme.subtle)
             }
         }
     }
@@ -133,11 +133,11 @@ struct KeyboardSetupView: View {
                 .accessibilityIdentifier("wifiPassword")
                 .padding(.horizontal, 14).padding(.vertical, 12)
         }
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay(alignment: .bottom) {
             Text("2.4 GHz networks only.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.subtle)
                 .offset(y: 20)
         }
         .padding(.bottom, 26)
@@ -210,7 +210,7 @@ struct StepView<Content: View>: View {
                 marker
                 if !isLast {
                     Rectangle()
-                        .fill(state == .done ? Theme.accent : Color(.separator))
+                        .fill(state == .done ? Theme.accent : Theme.line)
                         .frame(width: 2)
                         .frame(minHeight: 26)
                 }
@@ -257,7 +257,7 @@ struct StepView<Content: View>: View {
             case .active:
                 Circle().strokeBorder(Theme.accent, lineWidth: 2)
             case .pending:
-                Circle().strokeBorder(Color(.separator), lineWidth: 2)
+                Circle().strokeBorder(Theme.line, lineWidth: 2)
             }
         }
         .frame(width: 24, height: 24)

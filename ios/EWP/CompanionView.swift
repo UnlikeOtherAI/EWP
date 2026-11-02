@@ -21,46 +21,39 @@ struct CompanionView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                Group {
+                VStack(spacing: Theme.cardSpacing) {
+                    header
                     if isWide {
-                        // An iPad has room to show the primary action beside
-                        // the two reference cards instead of above them.
-                        // Equal explicit widths: left to negotiate, the columns
-                        // size to their text and long messages get truncated.
+                        // An iPad has room to show the field beside the two
+                        // quiet blocks instead of above them. Equal explicit
+                        // widths: left to negotiate, the columns size to their
+                        // text and long messages get truncated.
                         HStack(alignment: .top, spacing: Theme.cardSpacing) {
-                            SharingCard(model: model, prominent: true)
+                            ShareField(model: model, prominent: true)
                                 .frame(maxWidth: .infinity)
                             VStack(spacing: Theme.cardSpacing) {
-                                ConnectionCard(model: model)
-                                KeyboardCard(model: model, showSetup: $showSetup)
+                                AgentBlock(model: model)
+                                KeyboardBlock(model: model, showSetup: $showSetup)
                             }
                             .frame(maxWidth: .infinity)
                         }
                     } else {
-                        VStack(spacing: Theme.cardSpacing) {
-                            SharingCard(model: model)
-                            ConnectionCard(model: model)
-                            KeyboardCard(model: model, showSetup: $showSetup)
-                        }
+                        ShareField(model: model)
+                        AgentBlock(model: model)
+                        KeyboardBlock(model: model, showSetup: $showSetup)
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
                 .padding(.bottom, 32)
                 .readableColumn(wide: isWide)
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("EWP")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink("Advanced") { AdvancedView(model: model) }
-                        .accessibilityIdentifier("advanced")
-                }
-            }
+            .signalBackground()
+            .toolbar(.hidden, for: .navigationBar)
             .refreshable { model.rescan() }
             .sheet(isPresented: $showSetup) { KeyboardSetupView(model: model) }
             .overlay { if model.identifying { IdentifyFlash(name: model.displayName) } }
         }
+        .tint(Theme.accent)
         .task { startPolling() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -75,51 +68,121 @@ struct CompanionView: View {
             }
         }
     }
+
+    /// The app's own header, rather than a system large title: the wordmark is
+    /// heavier and tighter than any system style, and it is half the identity.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Wordmark()
+            Spacer(minLength: 12)
+            NavigationLink { AdvancedView(model: model) } label: {
+                HStack(spacing: 6) {
+                    Text("Advanced")
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .medium))
+                }
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.subtle)
+            }
+            .accessibilityIdentifier("advanced")
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 6)
+    }
 }
 
 // MARK: - Screen sharing
 
-private struct SharingCard: View {
+/// The one block that is allowed to use the colour, and only when live.
+private struct ShareField: View {
     @ObservedObject var model: CompanionModel
     var prominent = false
+    @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 44
+
+    private var live: Bool { model.sharing == .live }
 
     var body: some View {
-        Card {
-            VStack(spacing: prominent ? 20 : 14) {
+        VStack(alignment: .leading, spacing: 0) {
+            BlockLabel(title: "Screen sharing", tint: labelTint) { beacon }
+            Text(title)
+                .font(.system(size: titleSize, weight: .semibold))
+                .tracking(-1.9)
+                .foregroundStyle(live ? Theme.onLive : Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                // Held to a measure so it breaks into two lines rather than
+                // running the width of the field as one thin headline.
+                .frame(maxWidth: live ? 350 : 300, alignment: .leading)
+                .padding(.top, 18)
+            Text(detail)
+                .font(.system(size: 15.5))
+                .lineSpacing(4)
+                .foregroundStyle(live ? Theme.onLiveSecondary : Theme.subtle)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 330, alignment: .leading)
+                .padding(.top, 10)
+            if live {
+                facts.padding(.top, 16)
+                Spacer(minLength: 24)
+            } else {
+                Spacer(minLength: 16)
                 emblem
-                VStack(spacing: 6) {
-                    Text(title).font(prominent ? .title2.weight(.semibold) : .title3.weight(.semibold))
-                    Text(detail)
-                        .font(prominent ? .body : .subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                action
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 6)
+                Spacer(minLength: 16)
             }
-            .frame(maxWidth: .infinity)
-            .padding(prominent ? 32 : 20)
+            action
+        }
+        .padding(prominent ? 26 : 22)
+        .frame(maxWidth: .infinity, minHeight: prominent ? 400 : 348, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.fieldRadius, style: .continuous)
+                .fill(live ? Theme.live : Theme.standby)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.fieldRadius, style: .continuous)
+                        .stroke(live ? .clear : Theme.standbyLine, lineWidth: 1)
+                }
         }
         .broadcastTrigger(model)
-        .animation(.easeInOut(duration: 0.25), value: model.sharing)
+        .animation(.easeInOut(duration: 0.3), value: model.sharing)
     }
 
-    @ViewBuilder private var emblem: some View {
-        ZStack {
-            Circle()
-                .fill(model.sharing == .live ? Color.red.opacity(0.12) : Color(.tertiarySystemFill))
-                .frame(width: prominent ? 84 : 60, height: prominent ? 84 : 60)
-            switch model.sharing {
-            case .off:
-                Image(systemName: "rectangle.on.rectangle")
-                    .font(.system(size: prominent ? 34 : 24, weight: .regular))
-                    .foregroundStyle(.secondary)
-            case .requesting:
-                ProgressView()
-            case .live:
-                StatusDot(color: .red, pulsing: true).scaleEffect(prominent ? 2.2 : 1.6)
+    private var labelTint: Color { live ? Theme.onLiveSecondary : Theme.subtle }
+
+    /// The field at rest still shows the thing it will become: a broadcast
+    /// mark on a dormant key, outlined rather than filled.
+    private var emblem: some View {
+        Image(systemName: "dot.radiowaves.left.and.right")
+            .font(.system(size: 19, weight: .regular))
+            .foregroundStyle(Theme.subtle.opacity(0.7))
+            .frame(width: 74, height: 60)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Theme.surface.opacity(0.55))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Theme.standbyLine, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    }
             }
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var beacon: some View {
+        switch model.sharing {
+        case .off: Beacon(text: "STANDBY", tint: Theme.subtle, filled: false)
+        case .requesting: Beacon(text: "WAITING", tint: Theme.subtle, breathing: true)
+        case .live: Beacon(text: "LIVE", tint: Theme.onLive, breathing: true)
         }
-        .accessibilityHidden(true)
+    }
+
+    /// What is actually leaving the device, stated plainly on the field.
+    private var facts: some View {
+        HStack(spacing: 14) {
+            Text("2 frames per second")
+            Rectangle().fill(Theme.onLive.opacity(0.45)).frame(width: 1, height: 12)
+            Text("1280 px")
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(Theme.onLive)
+        .accessibilityElement(children: .combine)
     }
 
     private var title: String {
@@ -142,142 +205,196 @@ private struct SharingCard: View {
         switch model.sharing {
         case .off:
             Button("Start Screen Sharing") { model.startSharing() }
-                .buttonStyle(PrimaryButtonStyle())
+                .buttonStyle(FieldButtonStyle(onColour: false))
                 .accessibilityIdentifier("startScreenSharing")
         case .requesting:
-            Text("Apple asks before any app can record this screen.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            FinePrint(text: "Apple asks before any app can record this screen.",
+                      symbol: "hand.raised")
         case .live:
             Button("Stop Sharing") { Task { await model.stopSharing() } }
-                .buttonStyle(SecondaryButtonStyle(role: .destructive))
+                .buttonStyle(FieldButtonStyle())
                 .accessibilityIdentifier("stopScreenSharing")
         }
     }
 }
 
-// MARK: - Connection
+// MARK: - Your agent
 
-private struct ConnectionCard: View {
+private struct AgentBlock: View {
     @ObservedObject var model: CompanionModel
 
     var body: some View {
-        Card(header: "Your Agent", caption: caption) {
-            CardRow(divider: model.agentPrompt != nil) { state }
+        VStack(alignment: .leading, spacing: 0) {
+            BlockLabel(title: "Your agent") { reachability }
+            state.padding(.top, 8)
             if let prompt = model.agentPrompt {
-                CardRow(divider: true) {
-                    Button { model.copyPrompt(prompt) } label: {
-                        Label(model.promptCopied ? "Copied" : "Copy Agent Prompt",
-                              systemImage: model.promptCopied ? "checkmark" : "doc.on.doc")
-                            .foregroundStyle(model.promptCopied ? Color.green : Theme.accent)
-                    }
-                    .accessibilityIdentifier("copyAgentPrompt")
+                Button { model.copyPrompt(prompt) } label: {
+                    Label(model.promptCopied ? "Copied" : "Copy Agent Prompt",
+                          systemImage: model.promptCopied ? "checkmark" : "doc.on.doc")
                 }
-                CardRow(divider: false) {
-                    ShareLink(item: prompt) {
-                        Label("Send to Another Device", systemImage: "square.and.arrow.up")
+                .buttonStyle(PrimaryButtonStyle())
+                .accessibilityIdentifier("copyAgentPrompt")
+                .padding(.top, 14)
+                ShareLink(item: prompt) {
+                    HStack(spacing: 6) {
+                        Text("Send to Another Device")
+                        Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold))
                     }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.ink)
+                    .frame(maxWidth: .infinity, minHeight: 34)
                 }
+                FinePrint(text: "Contains this device's access key. Give it to your own agent and no one else.")
+                    .padding(.top, 4)
+            } else {
+                FinePrint(text: "Everything your agent needs appears here once this device is on the network.",
+                          symbol: "antenna.radiowaves.left.and.right")
+                    .padding(.top, 14)
             }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Theme.card)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                        .stroke(Theme.line, lineWidth: 1)
+                }
         }
         .animation(.easeInOut(duration: 0.2), value: model.promptCopied)
     }
 
-    private var caption: String {
-        model.agentPrompt == nil
-            ? "Everything your agent needs will appear here once this device is on the network."
-            : "Contains this device's access key. Give it to your own agent and no one else."
+    @ViewBuilder private var reachability: some View {
+        switch model.reachability {
+        case .starting, .verifying:
+            Beacon(text: "CHECKING", tint: Theme.subtle, breathing: true)
+        case .reachable:
+            Beacon(text: "REACHABLE", tint: Theme.accent)
+        case .unavailable:
+            Beacon(text: "OFFLINE", tint: Theme.subtle, filled: false)
+        }
     }
 
     @ViewBuilder private var state: some View {
         switch model.reachability {
-        case .starting:
-            HStack(spacing: 10) { ProgressView(); Text("Starting…").foregroundStyle(.secondary) }
-        case .verifying:
-            HStack(spacing: 10) { ProgressView(); Text("Checking the network…").foregroundStyle(.secondary) }
+        case .starting, .verifying:
+            headline("Checking the network…")
         case .reachable:
-            StatusLabel(text: "Ready for your agent", color: .green)
+            headline("Ready for your agent")
         case .unavailable(let reason):
             VStack(alignment: .leading, spacing: 8) {
-                StatusLabel(text: "Not reachable", color: .orange)
+                headline("Not reachable")
                 // Without this a narrow column truncates instead of wrapping.
                 Text(reason)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.subtle)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Try Again") { model.retry() }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
             }
         }
+    }
+
+    private func headline(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 21, weight: .semibold))
+            .tracking(-0.6)
+            .foregroundStyle(Theme.ink)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 // MARK: - Keyboard
 
-private struct KeyboardCard: View {
+private struct KeyboardBlock: View {
     @ObservedObject var model: CompanionModel
     @Binding var showSetup: Bool
 
     var body: some View {
-        Card(header: "Keyboard", caption: caption) {
+        VStack(alignment: .leading, spacing: 10) {
             if let keyboard = model.discovery.keyboards.first {
                 // Tapping it reopens setup: a board moved to a different
                 // network is the one reason to come back to this flow.
-                CardRow(divider: false) {
-                    Button { showSetup = true } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "keyboard")
-                                .font(.title3)
-                                .foregroundStyle(Theme.accent)
-                                .frame(width: 28)
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(keyboard.title).foregroundStyle(.primary).lineLimit(1)
-                                StatusLabel(text: "On this network", color: .green)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
+                Button { showSetup = true } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text("Keyboard")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.subtle)
+                            HStack(spacing: 10) {
+                                Text(keyboard.title)
+                                    .font(.system(size: 19, weight: .semibold))
+                                    .tracking(-0.4)
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(1)
+                                StatusLabel(text: "On this network", color: Theme.accent)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(Theme.subtle)
                             }
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                                .accessibilityHidden(true)
                         }
-                        // A plain button only accepts taps on what it draws,
-                        // and most of this row is spacer.
-                        .contentShape(Rectangle())
+                        Spacer(minLength: 8)
+                        glyph
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("keyboardDetail")
+                    // A plain button only accepts taps on what it draws,
+                    // and most of this row is spacer.
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("keyboardDetail")
             } else {
-                CardRow(divider: false) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "keyboard")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28)
-                                .accessibilityHidden(true)
-                            Text("No keyboard yet")
-                        }
-                        Button("Set Up Keyboard") { showSetup = true }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .accessibilityIdentifier("setUpKeyboard")
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Keyboard")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.subtle)
+                        Text("No keyboard yet")
+                            .font(.system(size: 19, weight: .semibold))
+                            .tracking(-0.4)
+                            .foregroundStyle(Theme.ink)
                     }
+                    Spacer(minLength: 8)
+                    glyph
                 }
+                Text("A keyboard board lets your agent type and click on this device, not just watch it.")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(2)
+                    .foregroundStyle(Theme.subtle)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Set Up Keyboard") { showSetup = true }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .accessibilityIdentifier("setUpKeyboard")
+                    .padding(.top, 2)
             }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 17)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.line, lineWidth: 1)
         }
     }
 
-    private var caption: String {
-        model.discovery.keyboards.isEmpty
-            ? "A keyboard board lets your agent type and click on this device, not just watch it."
-            : "To let it type here, pair it with this device in Settings → Bluetooth."
+    /// The board itself, drawn as a key cap rather than a list icon.
+    private var glyph: some View {
+        Image(systemName: "keyboard")
+            .font(.system(size: 17))
+            .foregroundStyle(Theme.accent)
+            .frame(width: 42, height: 34)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.card)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Theme.line, lineWidth: 1)
+                    }
+            }
+            .accessibilityHidden(true)
     }
 }
-
 
 /// What `identify` looks like: this device shouting its name across a room of
 /// identical hardware.
@@ -288,13 +405,14 @@ private struct IdentifyFlash: View {
 
     var body: some View {
         ZStack {
-            Theme.accent
+            Theme.live
             Text(name)
-                .font(.system(size: 64, weight: .heavy, design: .rounded))
+                .font(.system(size: 64, weight: .heavy))
+                .tracking(-2)
                 .minimumScaleFactor(0.3)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.onLive)
                 .padding(40)
         }
         .ignoresSafeArea()

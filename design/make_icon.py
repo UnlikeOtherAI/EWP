@@ -33,10 +33,10 @@ RADIUS = 0.28 * TILE_WIDTH
 
 # Dormant tiles stay a step above the background so the grid reads at 40 px.
 PALETTE = {
-    'default': dict(dormant='#2C3349', highlight='#454E70',
-                    awake=('#6E7BFF', '#4453E8'), glow='#5B6CFF'),
-    'dark': dict(dormant='#39405A', highlight='#49527180'[:7],
-                 awake=('#6E7BFF', '#4453E8'), glow='#5B6CFF'),
+    'default': dict(dormant='#34312C', highlight='#4A453C',
+                    awake=('#ED6A4A', '#CB3C20'), glow='#E05030'),
+    'dark': dict(dormant='#403B33', highlight='#554E43',
+                 awake=('#ED6A4A', '#CB3C20'), glow='#E05030'),
     'tinted': dict(dormant='#858585', highlight='#9C9C9C',
                    awake=('#F6F6F6', '#E5E5E5'), glow='#DDDDDD'),
 }
@@ -68,7 +68,7 @@ def tile_mask(box):
 
 
 def background():
-    base = gradient((HI, HI), '#161A26', '#07080D')
+    base = gradient((HI, HI), '#211F1C', '#0A0908')
     lift = Image.new('L', (HI, HI))
     draw = ImageDraw.Draw(lift)
     extent = SIZE * 0.65 * SCALE
@@ -77,7 +77,7 @@ def background():
         radius = extent * ratio
         draw.ellipse((HI / 2 - radius, HI / 2 - radius, HI / 2 + radius, HI / 2 + radius),
                      fill=round(255 * 0.20 * (1 - ratio * ratio) ** 2))
-    return Image.composite(Image.new('RGB', (HI, HI), '#232942'), base, lift)
+    return Image.composite(Image.new('RGB', (HI, HI), '#2C2924'), base, lift)
 
 
 def render(appearance):
