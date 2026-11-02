@@ -959,3 +959,33 @@ shut. It going up means a person is at the device trying to pair and being told
 it took too long, and `help` now says so and says what to do: open a window and
 ask them to try again. The board recovers by reporting what it refused, rather
 than leaving a person to guess.
+
+### It types into an iPad, 2 November 2026
+
+An iPhone-class iOS device is paired as a HID keyboard and an agent types into
+it over MCP. `saved_hosts` 2 to 3, `hid_connected` true, host
+`04:bf:d5:dd:c8:4d/0`, named `Ondrej iPad`.
+
+The first attempt sent `e w p space h e l l o` and the owner reported
+**`ewp hlo`** on screen. The two missing letters are the firmware being
+correct and the test being sloppy: the sequence numbers came back
+`1 2 3 4 5 1 6 6 7`, with `1` and `6` repeated, because the test generated two
+colliding `request_id`s and the board replayed the earlier result instead of
+pressing the key a second time. That is the idempotency guarantee working as
+documented, observed by accident. Repeated with unique ids, twelve keys
+returned twelve consecutive sequence numbers.
+
+What it took, after a day of failures that all looked like Bluetooth and none
+of which were:
+
+| Fix | What it was |
+| --- | --- |
+| Just Works pairing | The board demanded a passkey it had no screen to show. |
+| Three disconnects | A host was dropped for arriving second, for another link holding input, and by a re-offer that handed input back mid-pairing. |
+| Bond store out of BLE callbacks | `pairingOpen()` and `onConnect` read NVS on the host task; links died of supervision timeout. |
+| Re-offer parked hosts | A peer whose private address resolved late was parked for good. |
+| Encrypted report map | A documented iOS requirement the board failed, measured handing over 99 bytes in the clear. |
+| A window open when the person taps | The window had expired; iOS reported that pairing took too long. |
+
+Only the last of those needed a person, and only for the first pairing of an
+iOS device.
