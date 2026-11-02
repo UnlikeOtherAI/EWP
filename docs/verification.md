@@ -989,3 +989,32 @@ of which were:
 
 Only the last of those needed a person, and only for the first pairing of an
 iOS device.
+
+### Two gaps the owner found, 2 November 2026
+
+**A board on a wall charger could not be moved to another network.** Wi-Fi
+arrives over Bluetooth, and that write is refused once the board has Wi-Fi:
+`setupOpen()` is true only while there is none, or in the five minutes after a
+reset. A board on a shelf with a cable can be re-provisioned over USB; a board
+on a wall charger cannot be re-provisioned at all. `open_setup` now reopens
+that window on demand, 30 to 900 seconds, so an agent can orchestrate a move
+to another network from a phone.
+
+    open_setup {"seconds": 600}
+    -> {"setup_open": true, "expires_seconds": 600}
+
+Not verified end to end: the window opens and the gate it controls is the one
+the provisioning write checks, but no device has actually re-provisioned a
+board that already had Wi-Fi.
+
+**Nothing recorded what was sent.** The app showed that a keyboard was on the
+network and nothing about what came through it, which is what made it feel
+unfinished. `input_log` keeps the last 16 inputs in a fixed-size buffer — no
+allocation, on a board at 87% of its flash — and serves them newest last:
+
+    {"sequence": 3, "kind": "key", "usage": 5, "modifiers": 2,
+     "notified": true, "seconds_ago": 5}
+
+It records what the board sent, not what the target did with it, and the tool
+description says so. The app does not show it yet; that is the half still
+missing, and the one the owner was pointing at.

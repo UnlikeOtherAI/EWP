@@ -77,6 +77,19 @@ volatile bool storeFull = false;
 uint32_t inputSequence = 0;
 bool mdnsStarted = false;
 portMUX_TYPE hidMux = portMUX_INITIALIZER_UNLOCKED;
+// The last few inputs, so the app can show what came through and an agent can
+// check what a device was actually sent. Fixed size, no allocation: this runs
+// on a board with 87% of its flash used.
+struct InputRecord { uint32_t at; uint16_t sequence; uint8_t usage, modifiers; bool pointer, notified; };
+InputRecord inputLog[16] = {};
+volatile int inputLogNext = 0, inputLogTotal = 0;
+void recordInput(uint16_t sequence, uint8_t usage, uint8_t modifiers, bool pointer, bool notified) {
+  portENTER_CRITICAL(&hidMux);
+  inputLog[inputLogNext] = {millis(), sequence, usage, modifiers, pointer, notified};
+  inputLogNext = (inputLogNext + 1) % 16;
+  ++inputLogTotal;
+  portEXIT_CRITICAL(&hidMux);
+}
 uint16_t hidHandle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t pairingHandle = BLE_HS_CONN_HANDLE_NONE;
 // Subscription can arrive before encryption completes. Keep it until the
@@ -646,6 +659,8 @@ void handleMCP() {
     addTool(tools, "cancel_pairing", prefix + "Close the pairing window now and go back to advertising for the selected host.", R"({"type":"object","properties":{"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "select_host", prefix + "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
     addTool(tools, "forget_host", prefix + "Delete one saved bond to free a slot. Pass confirm with this board's id. The target keeps its own bond until a person removes it there.", R"({"type":"object","properties":{"host_id":{"type":"string"},"confirm":{"type":"string"},"request_id":{"type":"string","maxLength":64}},"required":["host_id","confirm"],"additionalProperties":false})");
+    addTool(tools, "input_log", prefix + "The last 16 inputs this board sent, newest last: sequence, usage and modifiers, whether the report went out, and how long ago. It records what was sent, not what the target did with it.", R"({"type":"object","properties":{},"additionalProperties":false})");
+    addTool(tools, "open_setup", prefix + "Let a paired device send this board Wi-Fi again, for a while. A board that already has Wi-Fi refuses the write, so moving one to another network needs this first; a board with none accepts it anyway. The device must already be bonded, and the write is encrypted. 30 to 900 seconds, default 300.", R"({"type":"object","properties":{"seconds":{"type":"integer","minimum":30,"maximum":900,"default":300},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "set_name", prefix + "Name this board for people and agents. The name persists, appears in the Bluetooth name, the mDNS TXT records and every tool description.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":32},"request_id":{"type":"string","maxLength":64}},"required":["name"],"additionalProperties":false})");
     addTool(tools, "set_layout", prefix + "Declare which physical keyboard layout this board has, by name from the layouts list in help or by HID country code. It persists. A host asks a keyboard this once, while discovering it, so a host that is already paired keeps the old answer until it pairs again, and changing it makes connected hosts re-discover every service, which interrupts input for a moment. It does not change what press_key types: that is decided by the layout the host itself is set to.", R"({"type":"object","properties":{"layout":{"type":["string","integer"]},"request_id":{"type":"string","maxLength":64}},"required":["layout"],"additionalProperties":false})");
     addTool(tools, "identify", prefix + "Make this board announce itself: it advertises as IDENTIFY <name> and wakes the screen of the host it drives.", R"({"type":"object","properties":{"seconds":{"type":"integer","minimum":1,"maximum":30,"default":10},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
@@ -690,6 +705,14 @@ void handleMCP() {
       }
       else failed = !forgetHost(args["host_id"].as<String>(), out);
     }
+    else if (name == "open_setup") {
+      uint32_t seconds = args["seconds"] | 300;
+      if (seconds < 30) seconds = 30;
+      if (seconds > 900) seconds = 900;
+      provisionUntil = millis() + seconds * 1000;
+      out["setup_open"] = true; out["expires_seconds"] = seconds;
+      out["note"] = "A bonded device can write Wi-Fi over Bluetooth until this lapses.";
+    }
     else if (name == "set_name") {
       if (!args["name"].is<String>()) { out["error"] = "name is required"; failed = true; }
       else failed = !persistName(args["name"].as<String>(), out);
@@ -719,6 +742,7 @@ void handleMCP() {
           memset(report, 0, sizeof(report)); bool released = keyboard->notify(report, sizeof(report), target);
           out["notified"] = sent && released; out["host_action_verified"] = false;
           out["sequence"] = ++inputSequence; out["sent_ms"] = millis(); failed = !(sent && released);
+          recordInput(inputSequence, args["usage"].as<int>(), args["modifiers"] | 0, false, sent && released);
         }
       } else {
         for (const char *key : {"dx", "dy", "wheel"}) {
@@ -732,7 +756,26 @@ void handleMCP() {
           memset(report, 0, sizeof(report)); bool released = mouse->notify(report, sizeof(report), target);
           out["notified"] = sent && released; out["host_action_verified"] = false;
           out["sequence"] = ++inputSequence; out["sent_ms"] = millis(); failed = !(sent && released);
+          recordInput(inputSequence, 0, 0, true, sent && released);
         }
+      }
+    } else if (name == "input_log") {
+      out["total"] = inputLogTotal;
+      auto entries = out["entries"].to<JsonArray>();
+      portENTER_CRITICAL(&hidMux);
+      InputRecord copy[16]; int next = inputLogNext;
+      memcpy(copy, inputLog, sizeof(copy));
+      portEXIT_CRITICAL(&hidMux);
+      uint32_t now = millis();
+      for (int i = 0; i < 16; ++i) {
+        const InputRecord &entry = copy[(next + i) % 16];
+        if (!entry.at) continue;
+        auto item = entries.add<JsonObject>();
+        item["sequence"] = entry.sequence;
+        item["kind"] = entry.pointer ? "pointer" : "key";
+        if (!entry.pointer) { item["usage"] = entry.usage; item["modifiers"] = entry.modifiers; }
+        item["notified"] = entry.notified;
+        item["seconds_ago"] = (now - entry.at) / 1000;
       }
     } else { out["error"] = "Unknown tool"; failed = true; }
     String text; serializeJson(out, text);
