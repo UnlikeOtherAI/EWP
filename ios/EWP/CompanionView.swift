@@ -19,23 +19,43 @@ struct CompanionView: View {
         NavigationStack {
             GeometryReader { geometry in
                 let layout = Layout(size: geometry.size)
-                ScrollView {
-                    VStack(spacing: Theme.cardSpacing) {
-                        header
-                        // Short content sits in the middle of the space left
-                        // under the wordmark rather than against the top with
-                        // the rest of the screen blank: on an iPad that blank
-                        // was half the display. The cards keep their own
-                        // height, so the slack goes to the spacers and not
-                        // into stretching the field past the size it asked for.
-                        Spacer(minLength: 0)
-                        cards(layout).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
+                if layout.logBesideIt {
+                    // Width enough for the log to live beside the rest, so it
+                    // is always visible rather than somewhere to navigate to.
+                    HStack(alignment: .top, spacing: Theme.cardSpacing) {
+                        ScrollView { home(layout, height: geometry.size.height) }
+                            .frame(maxWidth: .infinity)
+                        ScrollView {
+                            VStack(spacing: Theme.cardSpacing) {
+                                logHeader
+                                KeyLogView(log: model.received)
+                            }
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 32)
+                        }
+                        .frame(width: layout.logWidth)
                     }
-                    .frame(minHeight: geometry.size.height - 48, alignment: .top)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 32)
-                    .readableColumn(wide: layout.twoColumn)
+                } else {
+                    // Too narrow to show both, so they are two pages with the
+                    // dots under them, swiped between like photographs.
+                    TabView {
+                        ScrollView { home(layout, height: geometry.size.height - 28) }
+                            .signalBackground()
+                        ScrollView {
+                            VStack(spacing: Theme.cardSpacing) {
+                                logHeader
+                                KeyLogView(log: model.received)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 40)
+                        }
+                        .signalBackground()
+                    }
+                    // A page style inside a GeometryReader needs to be told
+                    // its size, or it lays out as nothing at all.
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .tabViewStyle(.page(indexDisplayMode: .always))
+                    .indexViewStyle(.page(backgroundDisplayMode: .always))
                 }
             }
             .background(KeyCatcher(log: model.received).frame(width: 0, height: 0))
@@ -59,6 +79,40 @@ struct CompanionView: View {
             default: break
             }
         }
+    }
+
+    /// The home page: everything that was here before the log arrived.
+    @ViewBuilder
+    private func home(_ layout: Layout, height: CGFloat) -> some View {
+        VStack(spacing: Theme.cardSpacing) {
+            header
+            // Short content sits in the middle of the space left under the
+            // wordmark rather than against the top with the rest of the screen
+            // blank: on an iPad that blank was half the display. The cards keep
+            // their own height, so the slack goes to the spacers and not into
+            // stretching the field past the size it asked for.
+            Spacer(minLength: 0)
+            cards(layout).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: height - 48, alignment: .top)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 32)
+        .readableColumn(wide: layout.twoColumn)
+    }
+
+    /// The log column carries its own heading, since on a tablet it sits
+    /// beside the wordmark rather than under it.
+    private var logHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Log")
+                .font(.system(size: 20, weight: .semibold))
+                .tracking(-0.6)
+                .foregroundStyle(Theme.ink)
+            Spacer(minLength: 8)
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 6)
     }
 
     @ViewBuilder
@@ -135,6 +189,13 @@ struct Layout {
     }
 
     let shape: Shape
+    /// Whether there is room for the log to sit beside everything else. Below
+    /// this a phone-width column plus a readable log does not fit, so the two
+    /// become pages instead.
+    let logBesideIt: Bool
+    /// How wide that column is. Wide enough for a line of typing to read as a
+    /// line, and never so wide that it crowds what it sits next to.
+    let logWidth: CGFloat
     let fieldHeight: CGFloat
     let padding: CGFloat
     /// Applied to the headline, which is the one thing that cannot simply
@@ -148,15 +209,32 @@ struct Layout {
         // 700 rather than 620: an iPhone Duo is 669 pt across its larger
         // screen, and splitting that leaves two columns narrower than a
         // phone's, which reads worse than one column and a scroll.
-        let wide = size.width >= 700
         // A screen taller than it is wide has room under the field for the
         // blocks, and needs it: an iPad Air in portrait is 1032 x 1376, and
         // beside the field that left half the display blank.
-        shape = wide ? (size.height > size.width ? .below : .beside) : .stacked
-        padding = wide ? 26 : 22
+        // A tablet in landscape has room for the field, the blocks and the
+        // log, three columns. In portrait there is room for two: everything
+        // laid out as it would be on a phone, and the log beside it. A phone
+        // has room for one, so the log becomes a second page.
+        logBesideIt = size.width >= 820
+        let portrait = size.height > size.width
+        // In portrait the two columns are a phone and its log, so the log
+        // takes enough width to read a line of typing as a line and the rest
+        // is left to lay out exactly as a phone does. In landscape there is
+        // room for three columns, so the log takes what it needs and no more.
+        // Landscape keeps the log narrow on purpose: the point of the extra
+        // width there is a third column, the field and the quiet blocks side
+        // by side with the log, and a log any wider pushes the home half back
+        // into two rows.
+        logWidth = logBesideIt ? (portrait ? size.width * 0.42
+                                           : min(360, max(280, size.width * 0.22))) : 0
+        let forHome = size.width - (logBesideIt ? logWidth + Theme.cardSpacing : 0)
+        let wideHome = forHome >= 700 && !(logBesideIt && portrait)
+        shape = wideHome ? (size.height > forHome ? .below : .beside) : .stacked
+        padding = wideHome ? 26 : 22
         // Splitting a 678 pt screen leaves columns narrower than a phone's,
         // so the headline comes down with them rather than overflowing.
-        let column = shape == .beside ? (size.width - 46) / 2 : size.width - 32
+        let column = shape == .beside ? (forHome - 46) / 2 : forHome - 32
         titleScale = column < 330 ? 0.78 : 1
 
         // The field is bounded by its own width as well as by the space left

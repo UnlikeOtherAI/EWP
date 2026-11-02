@@ -21,10 +21,6 @@ struct AdvancedView: View {
                             detail: otherDevices.isEmpty ? nil : "\(otherDevices.count)") {
                         NetworkView(model: model)
                     }
-                    MenuRow(title: "Key Log", icon: "keyboard",
-                            detail: model.received.total > 0 ? "\(model.received.total)" : nil) {
-                        KeyLogView(model: model)
-                    }
                     MenuRow(title: "Screen Sharing", icon: "rectangle.on.rectangle",
                             detail: model.captureLive ? "Live" : "Off", divider: false) {
                         ScreenSharingView(model: model)
@@ -319,47 +315,6 @@ private struct DiagnosticsView: View {
                     InlineError(message: error) { model.error = nil }
                 }
             }
-        }
-    }
-}
-
-
-/// What a hardware keyboard has sent this device, newest first. Reading it on
-/// screen and reading it through `received_input` give the same thing: this is
-/// for the person holding the device, that is for the agent driving it.
-private struct KeyLogView: View {
-    @ObservedObject var model: CompanionModel
-
-    var body: some View {
-        DetailScreen(title: "Key Log") {
-            Card {
-                if model.received.presses.isEmpty {
-                    CardRow(divider: false) {
-                        Text("Nothing yet. Keys appear here while EWP is the app in front; iOS gives key presses to no one else.")
-                            .font(.footnote).foregroundStyle(Theme.subtle)
-                    }
-                } else {
-                    ForEach(Array(model.received.presses.reversed().enumerated()), id: \.element.id) { index, press in
-                        CardRow(divider: index < model.received.presses.count - 1) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(press.label).foregroundStyle(Theme.ink)
-                                    Spacer(minLength: 8)
-                                    Text("usage \(press.usage)")
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(Theme.subtle)
-                                }
-                                Text(press.reportBytes)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Theme.subtle)
-                            }
-                        }
-                    }
-                }
-            }
-            FinePrint(text: model.received.total > model.received.presses.count
-                      ? "\(model.received.total) seen since launch; the oldest were dropped."
-                      : "\(model.received.total) seen since launch.")
         }
     }
 }

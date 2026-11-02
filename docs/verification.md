@@ -1056,3 +1056,30 @@ it, because the bonded host is the phone and the phone cannot be reinstalled
 over the network. The limit is iOS's and is stated in the tool description: an
 app receives key events only while it is frontmost, so typing into another app
 is invisible here, and no background mode changes that.
+
+### The log on screen, 2 November 2026
+
+The log is not a page to navigate to. Where there is width it is a column that
+is always there; where there is not, it is a second page a thumb away.
+
+| Size | Log | Home | Shape |
+| --- | --- | --- | --- |
+| iPad landscape 1376 × 1032 | beside, 303 pt | 1059 pt | `beside` — three columns: field, blocks, log |
+| iPad portrait 1032 × 1376 | beside, 433 pt | 585 pt | `stacked` — the home half laid out exactly as a phone |
+| iPhone portrait 440 × 956 | second page | 440 pt | `stacked`, two dots under it |
+| iPhone landscape 956 × 440 | beside, 280 pt | 662 pt | `stacked` |
+| iPad half split 507 × 1376 | second page | 507 pt | `stacked` |
+
+Landscape keeps the log narrow deliberately: the width is there to buy a third
+column, and a wider log pushes the home half back into two rows.
+
+Presses are gathered into runs rather than listed one per line, because a line
+of typing is one event to a person and timestamping every letter buries what
+you are looking for. A run ends at a newline, at a key with no character of its
+own, or after a three-second pause, and carries the time it began and how many
+presses it holds. Keys with no printable character — Tab, Escape, the arrows,
+anything with Command held — are listed by name in the accent colour beside the
+text, so a special key is visible rather than invisible.
+
+The phone's paging was blank white at first: a page-style `TabView` inside a
+`GeometryReader` lays out as nothing unless it is given a size.
