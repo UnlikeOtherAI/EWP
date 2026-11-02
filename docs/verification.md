@@ -574,10 +574,25 @@ appears to act on Service Changed by invalidating rather than re-reading
 immediately. The sequence that works is: set a non-zero code, signal Service
 Changed, let the host reconnect.
 
-Not verified: no key has been pressed. `hid_connected` is true and `press_key`
-would now be accepted, but the frontmost window on the only bonded host was
-the user's own chat, and a keystroke goes wherever focus happens to be. That
-test needs a target someone has chosen on purpose.
+#### A key, pressed, arriving
+
+With `hid_connected` true and an empty TextEdit document in front on the
+bonded Mac, four `press_key` calls over MCP — usages 8, 26, 19, 28 — put
+**`ewpy`** in the document.
+
+![A keystroke arriving](screenshots/keystroke-arrived.jpg)
+
+That is the whole chain working for the first time: an MCP call to the board
+over Wi-Fi, a HID report over Bluetooth, and a character in an application on
+the host. `notified: true` on each call, and now a host action to go with it.
+
+The fourth character is the useful one. Usage 28 is `y` on a US layout and `z`
+on a Czech QWERTZ one. The board was declaring Czech, country code 5, and `y`
+arrived — because the declaration tells the host what the keys *are*, while
+the character is chosen by the layout the host is *set to*, which here is US.
+This is the limit described above, demonstrated rather than asserted: an agent
+that needs a particular character still cannot get it by sending a usage and
+hoping.
 
 The picker has also not been seen rendered, because the step only appears once
 a board is on Wi-Fi and reachable over MCP, and because reaching it needs this
