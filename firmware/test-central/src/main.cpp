@@ -2,37 +2,66 @@
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 
-// Stands in for a phone. It scans for the EWP service, connects, lets the
-// keyboard drive security, and reports what happened over USB as JSON so a
-// test can read it without a person watching a screen.
-static const NimBLEUUID SERVICE("e7a00001-7c3d-4d21-a19a-455750000001");
+// Stands in for a phone. It finds the keyboard, bonds, subscribes to the HID
+// input reports and records what arrives, so the whole chain can be checked
+// without a person tapping a dialog. It also reads the attributes iOS is said
+// to care about, and reports whether they were readable without encryption,
+// which is a claim about iOS that can at least be measured here.
+static const NimBLEUUID EWP_SERVICE("e7a00001-7c3d-4d21-a19a-455750000001");
+static const NimBLEUUID HID_SERVICE((uint16_t)0x1812);
+static const NimBLEUUID REPORT_CHR((uint16_t)0x2a4d);
+static const NimBLEUUID REPORT_MAP((uint16_t)0x2a4b);
+static const NimBLEUUID HID_INFO((uint16_t)0x2a4a);
 
-String lastEvent = "idle";
-int connections = 0, bonds = 0, failures = 0;
+String lastEvent = "idle", lastReport = "", mapBeforeEncryption = "untried";
+int connections = 0, failures = 0, reportsSeen = 0, subscribed = 0;
 volatile bool encrypted = false;
 NimBLEAdvertisedDevice *target = nullptr;
+NimBLEClient *held = nullptr;
+
+static String hex(const uint8_t *data, size_t length) {
+  String out;
+  for (size_t i = 0; i < length; ++i) {
+    char pair[4]; snprintf(pair, sizeof(pair), "%02x", data[i]);
+    out += pair; if (i + 1 < length) out += ' ';
+  }
+  return out;
+}
+
+// Keep the recent ones, not just the last. A key press sends two reports, the
+// press and the release, and the release is all zeros: sampling only the last
+// one proves a report arrived and nothing about which key it was.
+static const int RECENT = 6;
+String recent[RECENT];
+int recentNext = 0;
+
+static void onReport(NimBLERemoteCharacteristic *chr, uint8_t *data, size_t length, bool isNotify) {
+  ++reportsSeen;
+  lastReport = hex(data, length);
+  recent[recentNext] = lastReport;
+  recentNext = (recentNext + 1) % RECENT;
+  lastEvent = "report";
+  // Printed as it happens. Asking over the same serial line that resets this
+  // board is a race; a stream is not.
+  Serial.printf("{\"report\":\"%s\",\"n\":%d}\n", lastReport.c_str(), reportsSeen);
+}
 
 class ClientCallbacks : public NimBLEClientCallbacks {
-  void onConnect(NimBLEClient *client) override {
-    ++connections; lastEvent = "connected";
-    // The keyboard asks for security itself; this mirrors a phone that
-    // accepts rather than one that demands.
-    client->secureConnection();
-  }
+  void onConnect(NimBLEClient *client) override { ++connections; lastEvent = "connected"; }
   void onDisconnect(NimBLEClient *client, int reason) override {
-    encrypted = false;
+    encrypted = false; subscribed = 0;
     lastEvent = String("disconnected reason=") + reason;
   }
   void onAuthenticationComplete(NimBLEConnInfo &info) override {
     encrypted = info.isEncrypted();
-    if (info.isEncrypted()) { ++bonds; lastEvent = "encrypted"; }
-    else { ++failures; lastEvent = "encryption failed"; }
+    lastEvent = info.isEncrypted() ? "encrypted" : "encryption failed";
+    if (!info.isEncrypted()) ++failures;
   }
 } clientCallbacks;
 
 class ScanCallbacks : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice *device) override {
-    if (!device->isAdvertisingService(SERVICE) || target) return;
+    if (!device->isAdvertisingService(EWP_SERVICE) || target) return;
     target = new NimBLEAdvertisedDevice(*device);
     NimBLEDevice::getScan()->stop();
     lastEvent = String("found ") + device->getName().c_str();
@@ -44,25 +73,61 @@ void report() {
   doc["role"] = "test-central";
   doc["event"] = lastEvent;
   doc["connections"] = connections;
-  doc["bonds"] = bonds;
   doc["failures"] = failures;
   doc["encrypted"] = encrypted;
+  doc["connected"] = held && held->isConnected();
+  doc["subscribed_reports"] = subscribed;
+  doc["reports_seen"] = reportsSeen;
+  doc["last_report"] = lastReport;
+  { auto list = doc["recent_reports"].to<JsonArray>();
+    for (int i = 0; i < RECENT; ++i) {
+      const String &entry = recent[(recentNext + i) % RECENT];
+      if (entry.length()) list.add(entry);
+    } }
+  doc["report_map_without_encryption"] = mapBeforeEncryption;
   doc["bonded_peers"] = NimBLEDevice::getNumBonds();
   doc["target"] = target ? target->getAddress().toString().c_str() : "";
   serializeJson(doc, Serial); Serial.println();
 }
 
-void attempt() {
-  if (!target) { lastEvent = "no target yet"; return; }
-  auto client = NimBLEDevice::createClient();
-  client->setClientCallbacks(&clientCallbacks, false);
-  if (!client->connect(target)) { ++failures; lastEvent = "connect refused"; }
-  else {
-    // Give security time to complete before judging it.
-    for (int i = 0; i < 40 && !encrypted; ++i) delay(100);
-    lastEvent = encrypted ? "bonded" : "connected but never encrypted";
+// Before asking for security, try the attribute iOS is said to require
+// encryption on. A device that hands it over in the clear is the thing the
+// vendor documentation warns about, so measure it rather than assume it.
+static void probeBeforeEncryption() {
+  auto hid = held->getService(HID_SERVICE);
+  if (!hid) { mapBeforeEncryption = "no hid service"; return; }
+  auto map = hid->getCharacteristic(REPORT_MAP);
+  if (!map) { mapBeforeEncryption = "no report map"; return; }
+  NimBLEAttValue value = map->readValue();
+  mapBeforeEncryption = value.length() ? String("readable, ") + value.length() + " bytes"
+                                       : "refused or empty";
+}
+
+static void subscribeToReports() {
+  auto hid = held->getService(HID_SERVICE);
+  if (!hid) { lastEvent = "no hid service after encryption"; return; }
+  for (auto chr : hid->getCharacteristics(true)) {
+    if (chr->getUUID() != REPORT_CHR || !chr->canNotify()) continue;
+    if (chr->subscribe(true, onReport)) ++subscribed;
   }
-  NimBLEDevice::deleteClient(client);
+  lastEvent = subscribed ? String("subscribed to ") + subscribed + " reports"
+                         : "no report characteristic took a subscription";
+}
+
+void attempt(bool probeFirst) {
+  if (!target) { lastEvent = "no target yet"; return; }
+  if (held) { NimBLEDevice::deleteClient(held); held = nullptr; }
+  held = NimBLEDevice::createClient();
+  held->setClientCallbacks(&clientCallbacks, false);
+  // Delete cached attributes on connect. Keeping them reuses a GATT table
+  // from a session whose bond has since been cleared, and the link then
+  // connects but never encrypts.
+  if (!held->connect(target, true)) { ++failures; lastEvent = "connect refused"; return; }
+  if (probeFirst) probeBeforeEncryption();
+  held->secureConnection();
+  for (int i = 0; i < 50 && !encrypted; ++i) delay(100);
+  if (!encrypted) { lastEvent = "connected but never encrypted"; return; }
+  subscribeToReports();
 }
 
 void setup() {
@@ -86,13 +151,20 @@ void loop() {
     if (!deserializeJson(request, line)) {
       String method = request["method"] | "";
       if (method == "status") report();
-      else if (method == "connect") { attempt(); report(); }
+      else if (method == "connect") { attempt(false); report(); }
+      else if (method == "probe") { attempt(true); report(); }
+      else if (method == "reports") {
+        reportsSeen = 0; lastReport = "";
+        for (int i = 0; i < RECENT; ++i) recent[i] = "";
+        recentNext = 0; report();
+      }
       else if (method == "forget") {
-        NimBLEDevice::deleteAllBonds(); bonds = 0; lastEvent = "bonds cleared"; report();
+        if (held) { NimBLEDevice::deleteClient(held); held = nullptr; }
+        NimBLEDevice::deleteAllBonds(); lastEvent = "bonds cleared"; report();
       } else if (method == "rescan") {
         if (target) { delete target; target = nullptr; }
         NimBLEDevice::getScan()->start(0, false); lastEvent = "scanning"; report();
-      } else { Serial.println("{\"error\":\"unknown\"}"); }
+      } else Serial.println("{\"error\":\"unknown\"}");
     }
     line = "";
   }

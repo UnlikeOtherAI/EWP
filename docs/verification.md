@@ -799,3 +799,55 @@ the board is not the one refusing.
 The board the rig runs on had unrelated ESP-IDF firmware on it, in softAP mode,
 MAC `0c:b8:15:c3:6e:18`. Its whole 4 MB flash was read off before anything was
 written, 4194304 bytes, SHA-256 beginning `52624ed6`, so it can be put back.
+
+### The whole chain, byte for byte, with no phone, 2 November 2026
+
+The rig now subscribes to the keyboard's HID input reports and prints each one
+as it arrives, so a keystroke can be checked against the bytes that reached the
+host rather than against a `notified` flag.
+
+| Sent over MCP | Expected | Received by the rig |
+| --- | --- | --- |
+| `press_key` usage 4 | usage 4, no modifier | `00 00 04 00 00 00 00 00` |
+| `press_key` usage 43 | Tab | `00 00 2b 00 00 00 00 00` |
+| `press_key` usage 5, modifiers 2 | Shift+b | `02 00 05 00 00 00 00 00` |
+| `press_key` usage 76, modifiers 5 | Ctrl+Alt+Delete | `05 00 4c 00 00 00 00 00` |
+| `press_key` usage 62 | F5 | `00 00 3e 00 00 00 00 00` |
+| `press_key` usage 79 | Right arrow | `00 00 4f 00 00 00 00 00` |
+| `move_pointer` dx 10, dy -5 | buttons 0, X 10, Y -5 | `00 0a fb 00` |
+
+Every byte is the one the HID specification calls for: the modifier bitmask
+first, a reserved zero, then the usage; and for the pointer, buttons then two
+signed eight-bit deltas, `fb` being -5. Each key also produced a second,
+all-zero report, which is the release. `firmware/test-central/stream.py` runs
+it.
+
+Two things this cost, both worth remembering. The rig had to print reports as
+they happen rather than answer questions about them: asking over the serial
+line that resets the board is a race, and the first attempt at it reported
+zero reports while the keystrokes were in fact arriving. And connecting with
+cached attributes after a bond is cleared gives a link that connects and never
+encrypts; the rig deletes them on connect now.
+
+#### A pairing window excludes a host that is already bonded
+
+Chasing the above found behaviour worth stating plainly, because it looks like
+a fault and is not. `start_pairing` records the current bonds in
+`pairingExcluded`, so a host already in the bond store is refused for the
+duration of the window: the window exists to admit a host the board has never
+met, and an existing one must not be able to seize it. The way back to a
+bonded host is `select_host`. A test that opened a window and then expected its
+already-bonded peer to be admitted sat parked forever, with
+`accept_rejections` at zero because the refusal is a silent return.
+
+#### The report map is readable without encryption
+
+Measured by the rig, before asking for security: the Report Map characteristic
+`0x2a4b` returned 99 bytes over an unencrypted link. Silicon Labs' BLE HID
+documentation states that for iOS compatibility the Report Map characteristic
+and the Report Reference descriptor need encrypted read permission.
+`NimBLEHIDDevice` creates the report map with plain `NIMBLE_PROPERTY::READ`
+and offers no way to change it afterwards, so the board does not meet that
+requirement. Whether this is what stops iOS subscribing is not established —
+it is a documented requirement the board fails, measured rather than assumed,
+and the next thing worth fixing.
