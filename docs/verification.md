@@ -885,3 +885,25 @@ What none of this proves: these are ESP32 centrals configured to negotiate
 like a phone, not phones. They cannot reproduce what iOS does after pairing,
 which is where the real failures have been, and they are not the HID consumers
 a phone is.
+
+### Switching between two bonded hosts, 2 November 2026
+
+With the rig and the Mac both bonded, `firmware/test-central/switching.py`
+moves input between them and checks where the reports actually go.
+
+| Step | Result |
+| --- | --- |
+| `select_host` the rig, then press usage 4 | `hid_connected` true; the rig receives `00 00 04 00 00 00 00 00`. |
+| `select_host` the Mac, then press usage 5 | The rig receives **nothing**. Input does not leak to the host that was selected a moment ago. |
+| Press a key aimed at the rig while the Mac is selected | Refused: `host_id is not the selected and connected host`, with the selected host named. |
+
+The third line is the promise the tool descriptions make — that a `select_host`
+from another agent cannot deliver your keystrokes to a different target — and
+it is now checked rather than asserted.
+
+One operational note from the second step: after switching, `hid_connected`
+stayed false for the 36 seconds the test waited, because the Mac reconnects on
+its own schedule and nothing on the board can hurry it. `select_host` reserves
+input; it does not summon the host. On a wall that is the difference between a
+device that is ready and one that is merely selected, and an agent should poll
+`device_status` rather than assume.
