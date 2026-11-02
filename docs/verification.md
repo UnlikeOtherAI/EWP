@@ -621,10 +621,14 @@ machine.
 | A modifier | `press_key` usage 26, modifiers 2 | `ewpW`. Shift reached the host. |
 | The pointer | `move_pointer` dx 80, dy 60 | Cursor moved from 1702,1083 to 1829,1295. Right direction; the larger distance is macOS pointer acceleration. |
 
-Usages 8, 26 and 19 were picked to avoid y and z, which swap on the Czech
-QWERTZ layout the board is currently set to. The board's country code tells
-the host what the physical layout is; it does not decide what a usage types,
-and that remains the host's own layout setting.
+Usages 8, 26 and 19 were picked to avoid y and z, which swap on a Czech
+QWERTZ layout. That caution turned out to be misplaced, and the reason is
+worth recording: a sibling session sent usage 28 while the board was declaring
+Czech (country code 5) and the host produced `y`, not `z`. The country code
+tells the host what the physical keyboard is; the character a usage produces
+is decided by the host's own active layout, which was US. So typing specific
+text still needs a character-to-usage map per host layout. That is now
+observed, not argued.
 
 Every call returned `notified: true` with `host_action_verified: false`, which
 is the firmware being honest: it knows it sent the report and does not claim
@@ -638,14 +642,23 @@ Assistant: "cannot be identified and will not be usable until it is
 identified". It then bonded, encrypted, read the service and subscribed to
 nothing. `subscribe_events: 0`, `accept_rejections: 4`.
 
-The second keeps it from coming back. Once a host has subscribed, it does not
-write its CCCDs again: NimBLE restores them from its store on reconnection
-**without** an `onSubscribe` callback. A board that learns about subscriptions
-only from that callback never finds out, so every reconnection after the first
-leaves the host connected, encrypted and unusable. Measured here rather than
-reasoned about: `persisted_subscriptions: 5` with `subscribe_events: 0`,
-`authentication_state: 1`, `hid_connected: false` for as long as it was left.
-A bonded, encrypted peer is now accepted without waiting for that callback.
+The second keeps it from coming back. After a reboot, with the host bonded and
+encrypted and five CCCDs in the board's store, no subscription ever reached
+`acceptSubscribedHost`, so the host stayed connected, encrypted and unusable
+for as long as it was left: `persisted_subscriptions: 5`,
+`subscribe_events: 0`, `authentication_state: 1`, `hid_connected: false`.
+
+The mechanism is not what the fix's commit message (11b03e1) says. It claims
+NimBLE restores stored CCCDs without firing `onSubscribe`. That is wrong:
+`ble_gatts_subscribe_event` is called with `BLE_GAP_SUBSCRIBE_REASON_RESTORE`
+and `NimBLEServer` does forward it to `onSubscribe`, so a silent restore would
+still have been counted. The counter stayed at 0 through an encrypted
+reconnect with five CCCDs in the store, which means **the restore did not
+happen at all**. Why it did not is not established here.
+
+The fix stands either way, because it does not depend on the reason: a bonded,
+encrypted peer is accepted without waiting for a callback that did not come,
+and `notify()` still reports whether the report actually went out.
 
 This is the more dangerous of the two for a wall. The first bites once, at
 setup, where someone is watching. The second bites every morning, and looks
