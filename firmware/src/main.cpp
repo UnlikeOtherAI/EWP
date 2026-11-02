@@ -259,6 +259,8 @@ void appendStatus(JsonDocument &doc) {
   doc["last_disconnect_reason"] = lastDisconnectReason;
   doc["connections_seen"] = connectionsSeen;
   doc["security_request_result"] = securityRequestResult;
+  { uint16_t held; portENTER_CRITICAL(&hidMux); held = pairingHandle; portEXIT_CRITICAL(&hidMux);
+    doc["pairing_slot_taken"] = held != BLE_HS_CONN_HANDLE_NONE; }
   doc["subscribe_events"] = subscribeEvents;
   doc["accept_attempts"] = acceptAttempts;
   doc["accept_rejections"] = acceptRejections;
@@ -413,8 +415,14 @@ void acceptSubscribedHost(NimBLEConnInfo &info) {
   if ((!subscribed && !info.isBonded()) || !info.isEncrypted()) { ++acceptRejections; return; }
   if (parkedPeer(info)) return;
   uint16_t current = getHid();
-  if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
-    NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return;
+  if (!permittedHost(info)) { NimBLEDevice::getServer()->disconnect(info.getConnHandle()); return; }
+  if (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle()) {
+    // Another link holds input. During a pairing window the arriving host is
+    // the one being added on purpose, so it takes over; outside one, input
+    // stays where it is and this peer is simply not given it. Disconnecting
+    // here is what dropped a phone that had already connected and encrypted.
+    if (!pairingOpen()) return;
+    setHid(BLE_HS_CONN_HANDLE_NONE);
   }
   String id = hostId(info.getIdAddress());
   if (pairingOpen()) {
@@ -442,7 +450,19 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         accepted = pairingHandle == BLE_HS_CONN_HANDLE_NONE || pairingHandle == info.getConnHandle();
         if (accepted) pairingHandle = info.getConnHandle();
         portEXIT_CRITICAL(&hidMux);
-        if (!accepted) { server->disconnect(info.getConnHandle()); return; }
+        // A peer that merely arrived second is not disconnected. The slot is
+        // there to stop two unbonded peers competing for input, and
+        // permittedHost decides that later anyway; dropping the link here
+        // instead kills the host's pairing dialog mid-flight. On an iPhone it
+        // appeared and vanished in under a second, three times, which is what
+        // sent this hunt after supervision timeouts that were a symptom.
+        // A bonded peer reconnecting with a private address the sample has not
+        // resolved yet reaches this branch and takes the slot, so the real new
+        // phone is the one refused. Only a genuine shortage of links is worth
+        // a disconnect.
+        if (!accepted && server->getConnectedCount() >= CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
+          server->disconnect(info.getConnHandle()); return;
+        }
       }
     }
     for (auto &entry : subscriptions) if (entry.handle == BLE_HS_CONN_HANDLE_NONE) {
@@ -835,7 +855,10 @@ void loop() {
   // the board recovers by itself rather than needing a reconnection nobody is
   // there to trigger.
   static uint32_t reoffered = 0;
-  if (getHid() == BLE_HS_CONN_HANDLE_NONE && !selectedId().isEmpty()
+  // Not while a window is open: re-offering gives the old host the input
+  // handle back, and the phone that is halfway through pairing is then
+  // disconnected for arriving second.
+  if (!pairingOpen() && getHid() == BLE_HS_CONN_HANDLE_NONE && !selectedId().isEmpty()
       && static_cast<int32_t>(millis() - reoffered) > 2000) {
     reoffered = millis();
     auto server = NimBLEDevice::getServer();
