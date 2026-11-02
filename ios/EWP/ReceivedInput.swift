@@ -169,6 +169,22 @@ struct KeyCatcher: UIViewRepresentable {
         var log: ReceivedInput?
         override var canBecomeFirstResponder: Bool { true }
 
+        /// Asks for focus now and again shortly after, because the first
+        /// attempt happens before the view is in a window and fails silently.
+        func claimFocus() {
+            guard !isFirstResponder else { return }
+            becomeFirstResponder()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, !self.isFirstResponder else { return }
+                self.becomeFirstResponder()
+            }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { claimFocus() }
+        }
+
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             var handled = false
             for press in presses {
@@ -190,12 +206,16 @@ struct KeyCatcher: UIViewRepresentable {
         let view = CatchingView()
         view.log = log
         view.backgroundColor = .clear
-        DispatchQueue.main.async { view.becomeFirstResponder() }
+        // A view with no size is not reliably given first responder status,
+        // and without it no key event is ever delivered. One point, invisible,
+        // and it keeps the focus it is given.
+        view.isUserInteractionEnabled = false
+        view.claimFocus()
         return view
     }
 
     func updateUIView(_ view: CatchingView, context: Context) {
         view.log = log
-        if !view.isFirstResponder { view.becomeFirstResponder() }
+        view.claimFocus()
     }
 }

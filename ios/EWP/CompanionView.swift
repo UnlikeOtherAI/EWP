@@ -64,7 +64,7 @@ struct CompanionView: View {
                     .indexViewStyle(.page(backgroundDisplayMode: .always))
                 }
             }
-            .background(KeyCatcher(log: model.received).frame(width: 0, height: 0))
+            .background(KeyCatcher(log: model.received).frame(width: 1, height: 1).opacity(0.001))
             .signalBackground()
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { model.rescan() }

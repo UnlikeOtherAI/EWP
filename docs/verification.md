@@ -1108,3 +1108,30 @@ size, because a page style inside a `GeometryReader` lays out as nothing
 without one. And the console stayed the height of its text while empty page
 grew around it, because the minimum height was applied outside the card's
 background instead of inside it.
+
+### The log reads back, 2 November 2026
+
+Typed at the app, read back out of it over MCP:
+
+    a      usage   4  bytes 00 00 04 00 00 00 00 00
+    b      usage   5  bytes 00 00 05 00 00 00 00 00
+    c      usage   6  bytes 00 00 06 00 00 00 00 00
+    Right  usage  79  bytes 00 00 4f 00 00 00 00 00
+
+`00 00 4f` is byte for byte what the rig recorded the board **sending** for a
+right arrow, so the two ends of the loop agree: what `press_key` puts on the
+wire is what `received_input` reports arriving.
+
+It had never worked, and the reason was one line. The key catcher was mounted
+with `.frame(width: 0, height: 0)`, and a view with no size is not reliably
+granted first responder status, so `pressesBegan` was never called and the log
+stayed empty with nothing to say why. It is one point, invisible, takes no hit
+testing, and claims focus again when it moves into a window and shortly after,
+because the first attempt happens before there is a window to be first
+responder in.
+
+Still not one continuous run on a single host: the Mac has not reconnected
+since it was last switched away from, and the phone that is bonded runs the
+build from before any of this existed and is not on USB to be updated. The two
+halves are each proven against the same byte strings; they have not yet been
+proven in the same breath.
