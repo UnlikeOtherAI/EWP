@@ -483,3 +483,67 @@ Not verified: no key has been pressed on any host. `press_key`, `move_pointer`
 and the `notified` reporting remain untested, as does typing into a phone,
 which is the product's actual purpose and whose host stack may not demand
 layout identification the way macOS does.
+
+### Telling a host what layout these keys are in, 2 November 2026
+
+`hid->setHidInfo(0, 1)` declared the HID country code as 0, "not supported".
+That is why macOS opened its Keyboard Setup Assistant — "Your UnlikeOtherAI
+device cannot be identified and will not be usable until it is identified" —
+and then asked a keyboard with no keys to press the one beside its left Shift.
+
+The code is now stored in NVS under `layout`, defaulting to 13, International
+(ISO), which is the safest answer for a board with no opinion and is in any
+case better than 0. It is settable three ways: the `set_layout` MCP tool, by
+short name (`cz`, `uk`, `us`) or by number; the layout picker on the app's
+keyboard setup screen; and whatever was stored last, at boot.
+
+| Where | What it does |
+| --- | --- |
+| `firmware/src/main.cpp` | `keyboardLayouts` maps short names to the USB HID 1.11 section 6.2.1 codes. `persistLayout` stores the code, calls `setHidInfo` and signals Service Changed. `device_status` reports `keyboard_layout` and `keyboard_layout_code`; `help` carries the whole table under `layouts`. |
+| `ios/EWP/HIDKeyboardLayout.swift` | The same table for the app, plus the region map and `forRegion`, which falls back to International rather than guessing. |
+| `ios/EWP/KeyboardSetupView.swift` | Step 5 of setup: a picker, showing the region's layout until the board answers for itself. |
+| `ios/EWPTests/` | A new unit-test target. The region map is the only part that guesses, so it is the part pinned down. |
+
+#### What the country code is not
+
+It tells a host which physical layout to assume. It does not decide what a key
+types. `press_key` sends a HID usage, and the character that arrives is
+whatever that usage means under the layout the **host** is set to: usage 4 is
+`a` on a US host and `q` on a French one, whatever this board declares.
+
+So typing arbitrary text still needs a character-to-usage map per layout, and
+nothing in this repository has one. An agent that wants to type `ý` cannot ask
+for it; it can only send usages and hope the host agrees. The picker does not
+solve that and is not meant to. `help` says so in as many words, so an agent
+reading the tool list is not left to infer it.
+
+#### Changing it on a host that is already paired
+
+`setHidInfo` only writes the characteristic value, so nothing is rebuilt and
+the board does not reboot: the next host to discover the service reads the new
+value. A host that discovered it earlier cached the old one. `persistLayout`
+calls `ble_svc_gatt_changed(0x0001, 0xffff)` to ask it to look again, which
+bonded hosts honour if they subscribed to Service Changed, at the cost of
+re-discovering every service and interrupting input while they do. A host that
+does not honour it keeps the old layout until it pairs again. The tool
+description says this; so does the tool's own reply.
+
+| Check | How | Result |
+| --- | --- | --- |
+| Firmware builds | `pio run` | Succeeds. Flash 87.0% of 1310720 bytes. |
+| App builds | `xcodebuild` for the iPhone simulator | Succeeds. |
+| Region map | `xcodebuild test -only-testing:EWPTests` | 7 tests, 0 failures. Covers the regions that do not match their language (Austria German, Ireland British, Australia and India US), case folding, and the fallback for unmapped, empty and nil regions. |
+
+Not verified: nothing here has run on the board. `set_layout` has not been
+called against real firmware, the stored code has not been read back across a
+reboot, and no host has been observed accepting the new country code or
+dropping the Keyboard Setup Assistant — that needs a flash, and the cable was
+in use by other work. The picker has not been seen rendered, because the step
+only appears once a board is on Wi-Fi and reachable over MCP.
+
+One limit of the app path worth naming: the picker calls `set_layout` over the
+board's MCP endpoint, so it needs the board on Wi-Fi *and* this device holding
+its access token, which today is only obtainable over USB. On a phone that has
+never been given that token the picker reports it and does nothing else. The
+BLE provisioning characteristic would be the natural channel for a phone-only
+setup, and it was deliberately left alone here.

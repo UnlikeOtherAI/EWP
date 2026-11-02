@@ -66,6 +66,16 @@ targets:
       path: Broadcast/Broadcast.entitlements
       properties:
         keychain-access-groups: ['$(AppIdentifierPrefix)com.unlikeotherai.ewp']
+  EWPTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [EWPTests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.unlikeotherai.ewp.Tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: EWP
   EWPUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -83,4 +93,4 @@ schemes:
       targets:
         EWP: all
     test:
-      targets: [EWPUITests]
+      targets: [EWPTests, EWPUITests]

@@ -8,6 +8,9 @@ struct KeyboardSetupView: View {
     @ObservedObject var model: CompanionModel
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focus: Field?
+    /// What the picker shows before the board has told us anything: the
+    /// layout this device's own region suggests.
+    @State private var chosen = HIDKeyboardLayout.fromCurrentLocale
 
     private enum Field { case ssid, password }
 
@@ -37,11 +40,14 @@ struct KeyboardSetupView: View {
                     StepView(number: 3, title: "Wi-Fi details", state: detailsState, isLast: false) {
                         if detailsState == .active || detailsState == .busy { wifiFields }
                     }
-                    StepView(number: 4, title: "Join Wi-Fi", state: joinState, isLast: true) {
+                    StepView(number: 4, title: "Join Wi-Fi", state: joinState, isLast: false) {
                         if joinState == .busy {
                             Text("Usually under 20 seconds.")
                                 .font(.footnote).foregroundStyle(Theme.subtle)
                         }
+                    }
+                    StepView(number: 5, title: "Keyboard layout", state: layoutState, isLast: true) {
+                        if layoutState != .pending { layoutBody }
                     }
                 }
                 .padding(20)
@@ -66,6 +72,7 @@ struct KeyboardSetupView: View {
             }
         }
         .onAppear { model.provisioning.rescan() }
+        .task { await model.readKeyboardLayout() }
     }
 
     // MARK: Step bodies
@@ -154,6 +161,62 @@ struct KeyboardSetupView: View {
         model.configureWiFi()
     }
 
+    // MARK: Layout
+
+    /// The board's own answer once it gives one, and until then the guess
+    /// from this device's region. Showing the guess as though the board
+    /// agreed with it would be a lie the person cannot see through.
+    private var selectedLayout: HIDKeyboardLayout { model.keyboardLayout ?? chosen }
+
+    private func choose(_ layout: HIDKeyboardLayout) {
+        chosen = layout
+        Task { await model.setKeyboardLayout(layout) }
+    }
+
+    @ViewBuilder private var layoutBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Which physical layout a host should assume these keys are in. It does not change what an agent types: a key means whatever the host's own layout says it means.")
+                .font(.footnote).foregroundStyle(Theme.subtle)
+            Menu {
+                ForEach(HIDKeyboardLayout.all) { layout in
+                    Button {
+                        choose(layout)
+                    } label: {
+                        if layout == selectedLayout {
+                            Label(layout.label, systemImage: "checkmark")
+                        } else {
+                            Text(layout.label)
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(selectedLayout.label).foregroundStyle(Theme.ink)
+                    Spacer()
+                    if model.layoutBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.subtle.opacity(0.65))
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Theme.card)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            }
+            .disabled(model.layoutBusy)
+            .accessibilityIdentifier("keyboardLayout")
+            if model.keyboardLayout == nil {
+                Text("This device's region, until the keyboard answers for itself.")
+                    .font(.caption).foregroundStyle(Theme.subtle)
+            }
+            if let message = model.layoutError {
+                Text(message).font(.footnote).foregroundStyle(Theme.accent)
+            }
+        }
+    }
+
     // MARK: Phase to step state
 
     private var findState: StepState {
@@ -190,6 +253,15 @@ struct KeyboardSetupView: View {
         case .connected: return .done
         default: return .pending
         }
+    }
+
+    /// Reachable only over the board's own MCP endpoint, so this step waits
+    /// for Wi-Fi even when the board already has a layout stored.
+    private var layoutState: StepState {
+        if model.layoutBusy { return .busy }
+        if model.layoutError != nil { return .failed }
+        if model.keyboardLayout != nil { return .done }
+        return phase == .connected ? .active : .pending
     }
 }
 
