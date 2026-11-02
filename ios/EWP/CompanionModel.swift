@@ -44,12 +44,61 @@ final class CompanionModel: ObservableObject {
     /// Set when this device could not create or read its own access key, which
     /// leaves it unable to serve MCP at all.
     @Published private(set) var setupFailure: String?
+    /// What the keyboard board says its physical layout is, once asked. Nil
+    /// until it answers, so the picker shows the locale's guess rather than
+    /// claiming the board agrees with it.
+    @Published private(set) var keyboardLayout: HIDKeyboardLayout?
+    @Published private(set) var layoutBusy = false
+    @Published var layoutError: String?
     private var configuration: Configuration?
     private var subscriptions = Set<AnyCancellable>()
     private var requestTimeout: Task<Void, Never>?
     private var copyReset: Task<Void, Never>?
     var server: MCPServer?
     weak var broadcastPicker: RPSystemBroadcastPickerView?
+
+    /// The keyboard board's MCP endpoint, with the token this device holds
+    /// for it. Both halves are needed and neither is guaranteed: the board
+    /// has to be on this network, and someone has to have given this device
+    /// its access token in Advanced.
+    private func keyboardEndpoint() throws -> (url: URL, token: String) {
+        guard let keyboard = discovery.keyboards.first else {
+            throw EWPError.message("No keyboard on this network yet.")
+        }
+        guard let url = keyboard.endpoints.first(where: { $0.role == "keyboard" })?.url
+                ?? keyboard.primary?.url else {
+            throw EWPError.message("That keyboard did not publish an address.")
+        }
+        guard let token = remote.token(for: keyboard.id) else {
+            throw EWPError.message("Add this keyboard's access token in Advanced first.")
+        }
+        return (url, token)
+    }
+
+    /// Asks the board what layout it is declaring. Quiet on failure: the
+    /// picker falls back to the locale's guess, and a board that is not
+    /// reachable is not an error worth interrupting setup for.
+    func readKeyboardLayout() async {
+        guard let (url, token) = try? keyboardEndpoint() else { return }
+        guard let result = try? await DeviceHTTP.call(url: url, token: token, name: "device_status"),
+              let code = DeviceHTTP.document(result)["keyboard_layout_code"] as? Int,
+              let layout = HIDKeyboardLayout.named(UInt8(clamping: code)) else { return }
+        keyboardLayout = layout
+    }
+
+    func setKeyboardLayout(_ layout: HIDKeyboardLayout) async {
+        layoutBusy = true; layoutError = nil
+        defer { layoutBusy = false }
+        do {
+            let (url, token) = try keyboardEndpoint()
+            _ = try await DeviceHTTP.call(url: url, token: token, name: "set_layout",
+                                          arguments: ["layout": layout.name],
+                                          unreachable: "That keyboard did not accept the layout.")
+            keyboardLayout = layout
+        } catch {
+            layoutError = error.localizedDescription
+        }
+    }
 
     var deviceID: String { configuration?.deviceID ?? "" }
     var displayName: String { configuration?.displayName ?? "" }

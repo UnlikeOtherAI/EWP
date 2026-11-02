@@ -3,6 +3,9 @@
 #include <ESPmDNS.h>
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+// For ble_svc_gatt_changed: the HID Information characteristic is read once
+// during discovery and cached, so changing it has to invalidate that cache.
+#include <nimble/nimble/host/services/gatt/include/services/gatt/ble_svc_gatt.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -47,6 +50,12 @@ QueueHandle_t hostEvents;
 // Persisted under the NVS key "passkey" from when it was one, so a board
 // that already has a value keeps it.
 uint32_t setupCode;
+// HID bCountryCode. 13 is International (ISO): the safest answer for a board
+// with no opinion, and anything is better than 0, which means "not supported"
+// and makes macOS open its Keyboard Setup Assistant to ask a keyboard that
+// has no keys which key is next to its left Shift.
+uint8_t keyboardCountry = 13;
+NimBLEHIDDevice *hidDevice = nullptr;
 uint32_t provisionUntil;
 volatile bool storeFull = false;
 uint32_t inputSequence = 0;
@@ -164,6 +173,28 @@ void appendHosts(JsonDocument &doc) {
     item["hid_connected"] = id == selectedId() && getHid() != BLE_HS_CONN_HANDLE_NONE;
   }
 }
+// USB HID 1.11 section 6.2.1. Short names so an agent can say "cz" without
+// carrying the table around; the numbers are accepted too, including the ones
+// left out here.
+struct KeyboardLayout { uint8_t code; const char *name; };
+static const KeyboardLayout keyboardLayouts[] = {
+  {0, "unset"}, {2, "be"}, {3, "ca"}, {4, "ca-fr"}, {5, "cz"}, {6, "dk"}, {7, "fi"},
+  {8, "fr"}, {9, "de"}, {10, "gr"}, {11, "il"}, {12, "hu"}, {13, "iso"},
+  {14, "it"}, {15, "jp"}, {16, "kr"}, {17, "latam"}, {18, "nl"}, {19, "no"},
+  {21, "pl"}, {22, "pt"}, {23, "ru"}, {24, "sk"}, {25, "es"}, {26, "se"},
+  {27, "ch-fr"}, {28, "ch-de"}, {29, "ch"}, {30, "tw"}, {31, "tr"}, {32, "uk"},
+  {33, "us"},
+};
+String layoutName(uint8_t code) {
+  for (auto &entry : keyboardLayouts) if (entry.code == code) return entry.name;
+  return String(code);
+}
+void appendLayouts(JsonDocument &doc) {
+  auto list = doc["layouts"].to<JsonArray>();
+  for (auto &entry : keyboardLayouts) {
+    auto item = list.add<JsonObject>(); item["name"] = entry.name; item["code"] = entry.code;
+  }
+}
 // An agent arrives here knowing only the endpoint. `help` is how it learns
 // what this board is for and which mistakes to avoid, without a human
 // explaining the system first.
@@ -181,13 +212,16 @@ void appendHelp(JsonDocument &doc) {
   steps.add("Call select_host to reserve input for one saved host, then poll device_status until hid_connected is true before sending input.");
   steps.add("Use press_key and move_pointer, passing that same host_id, to type and click.");
   steps.add("Call set_name to label this board, and identify when a person needs to find it among boards that look alike.");
+  steps.add("Call set_layout if a host cannot identify this keyboard, or shows it the wrong physical layout. Read layouts in this reply for the names it takes.");
   auto care = doc["important"].to<JsonArray>();
   care.add("notified:true means this board sent the HID report. It does not prove the target acted on it. Verify on the target's screen.");
   care.add("press_key and move_pointer need the host_id you selected. They are refused unless that host is the selected one and is connected and subscribed, so a select_host from another agent cannot deliver your keystrokes to a different target.");
   care.add("Pass request_id on anything that changes state, and reuse the same value when you retry after a timeout. The last eight results are replayed instead of acted on twice.");
   care.add(String("This board holds ") + CONFIG_BT_NIMBLE_MAX_BONDS + " bonds and never deletes one by itself. When it is full, or store_full is true because the hosts' subscriptions filled its store, start_pairing fails; call forget_host to free a slot.");
   care.add("forget_host removes only this board's side of a bond. The target keeps its own until a person removes it there, and until then it fails to reconnect.");
+  care.add("set_layout declares which physical layout a host should assume these keys are in. It does not translate anything: press_key sends a HID usage, and what that usage types is decided by the layout the host itself is set to. Typing arbitrary text still needs a character-to-usage map for that layout, which this board does not have.");
   care.add("Pairing takes no code. A board with no bonds stays pairable so it can be set up at all; once one host is bonded, only a start_pairing window lets another in, and it lasts 180 seconds.");
+  appendLayouts(doc);
   doc["seeing_the_screen"] = "This board has no camera or screen access. If the target is an iPhone or iPad running EWP, browse _mcp._tcp.local. for a service whose role TXT record is 'app' on the same device, and use its get_screen tool.";
   doc["discovery"] = "This endpoint advertises _mcp._tcp.local. with TXT records id, name, role, path and fw. The name record falls back to the id until set_name is called. Credentials are never advertised.";
 }
@@ -197,6 +231,8 @@ void appendStatus(JsonDocument &doc) {
   doc["pairing_open"] = pairingOpen(); doc["saved_hosts"] = NimBLEDevice::getNumBonds();
   doc["host_capacity"] = CONFIG_BT_NIMBLE_MAX_BONDS; doc["store_full"] = storeFull;
   doc["host_switching"] = true;
+  doc["keyboard_layout"] = layoutName(keyboardCountry);
+  doc["keyboard_layout_code"] = keyboardCountry;
   if (!lastError.isEmpty()) doc["last_error"] = lastError;
   doc["ble_connections"] = NimBLEDevice::getServer()->getConnectedCount();
   doc["last_disconnect_reason"] = lastDisconnectReason;
@@ -246,6 +282,31 @@ bool persistName(const String &value, JsonDocument &out) {
   // the board reboots, which takes a renamed board off the network.
   if (mdnsStarted) MDNS.addServiceTxt("mcp", "tcp", "name", displayName());
   out["id"] = deviceId; out["name"] = deviceName; out["bluetooth_name"] = keyboardName;
+  return true;
+}
+bool persistLayout(JsonVariantConst value, JsonDocument &out) {
+  int code = -1;
+  if (value.is<int>()) code = value.as<int>();
+  else if (value.is<const char *>()) {
+    String wanted = value.as<String>(); wanted.toLowerCase();
+    for (auto &entry : keyboardLayouts) if (wanted == entry.name) { code = entry.code; break; }
+    if (code < 0) { out["error"] = "Unknown layout name"; appendLayouts(out); return false; }
+  } else { out["error"] = "layout must be a name or a HID country code"; return false; }
+  if (code < 0 || code > 35) { out["error"] = "HID country codes run from 0 to 35"; return false; }
+  keyboardCountry = static_cast<uint8_t>(code);
+  preferences.putUChar("layout", keyboardCountry);
+  // setHidInfo only writes the characteristic value, so nothing has to be
+  // rebuilt and the board does not have to reboot: the next host to discover
+  // this service reads the new value. A host that already discovered it
+  // cached the old one, and this is what asks it to look again. The cost is
+  // that it re-discovers every service, so input stops for a moment.
+  if (hidDevice) {
+    hidDevice->setHidInfo(keyboardCountry, 1);
+    ble_svc_gatt_changed(0x0001, 0xffff);
+  }
+  out["keyboard_layout"] = layoutName(keyboardCountry);
+  out["keyboard_layout_code"] = keyboardCountry;
+  out["already_paired_hosts"] = "Keep the layout they read when they paired, unless they honour Service Changed. Pair again to be sure.";
   return true;
 }
 bool beginIdentify(int seconds, JsonDocument &out) {
@@ -488,6 +549,7 @@ void handleMCP() {
     addTool(tools, "select_host", prefix + "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
     addTool(tools, "forget_host", prefix + "Delete one saved bond to free a slot. Pass confirm with this board's id. The target keeps its own bond until a person removes it there.", R"({"type":"object","properties":{"host_id":{"type":"string"},"confirm":{"type":"string"},"request_id":{"type":"string","maxLength":64}},"required":["host_id","confirm"],"additionalProperties":false})");
     addTool(tools, "set_name", prefix + "Name this board for people and agents. The name persists, appears in the Bluetooth name, the mDNS TXT records and every tool description.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":32},"request_id":{"type":"string","maxLength":64}},"required":["name"],"additionalProperties":false})");
+    addTool(tools, "set_layout", prefix + "Declare which physical keyboard layout this board has, by name from the layouts list in help or by HID country code. It persists. A host asks a keyboard this once, while discovering it, so a host that is already paired keeps the old answer until it pairs again, and changing it makes connected hosts re-discover every service, which interrupts input for a moment. It does not change what press_key types: that is decided by the layout the host itself is set to.", R"({"type":"object","properties":{"layout":{"type":["string","integer"]},"request_id":{"type":"string","maxLength":64}},"required":["layout"],"additionalProperties":false})");
     addTool(tools, "identify", prefix + "Make this board announce itself: it advertises as IDENTIFY <name> and wakes the screen of the host it drives.", R"({"type":"object","properties":{"seconds":{"type":"integer","minimum":1,"maximum":30,"default":10},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "press_key", prefix + "Press and release one HID keyboard usage on the host_id you selected, which must be the selected and connected host. Enter=40, Tab=43, Escape=41, Space=44; left GUI modifier=8. Check the target screen to verify its action.", R"({"type":"object","properties":{"host_id":{"type":"string"},"usage":{"type":"integer","minimum":4,"maximum":101},"modifiers":{"type":"integer","minimum":0,"maximum":255,"default":0},"request_id":{"type":"string","maxLength":64}},"required":["host_id","usage"],"additionalProperties":false})");
     addTool(tools, "move_pointer", prefix + "Relative mouse movement, wheel scrolling or a left click on the host_id you selected, which must be the selected and connected host. iPhone pointer control requires AssistiveTouch.", R"({"type":"object","properties":{"host_id":{"type":"string"},"dx":{"type":"integer","minimum":-127,"maximum":127,"default":0},"dy":{"type":"integer","minimum":-127,"maximum":127,"default":0},"wheel":{"type":"integer","minimum":-127,"maximum":127,"default":0},"click":{"type":"boolean","default":false},"request_id":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
@@ -533,6 +595,10 @@ void handleMCP() {
     else if (name == "set_name") {
       if (!args["name"].is<String>()) { out["error"] = "name is required"; failed = true; }
       else failed = !persistName(args["name"].as<String>(), out);
+    }
+    else if (name == "set_layout") {
+      if (args["layout"].isNull()) { out["error"] = "layout is required"; appendLayouts(out); failed = true; }
+      else failed = !persistLayout(args["layout"], out);
     }
     else if (name == "identify") {
       if (!args["seconds"].isNull() && !args["seconds"].is<int>()) { out["error"] = "seconds must be an integer"; failed = true; }
@@ -597,6 +663,7 @@ void setup() {
   for (int i=0; i<6; ++i) snprintf(digits + i*2, 3, "%02x", static_cast<uint8_t>(mac >> (8*i)));
   deviceId = String("ewp-") + digits;
   deviceName = preferences.getString("name", "");
+  keyboardCountry = preferences.getUChar("layout", 13);
   setupCode = preferences.getUInt("passkey", 0);
   if (!setupCode) { setupCode = 100000 + esp_random() % 900000; preferences.putUInt("passkey", setupCode); }
   // Kept in NVS for the encrypted provisioning scheme, which is not built
@@ -634,10 +701,10 @@ void setup() {
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   auto server = NimBLEDevice::createServer(); server->setCallbacks(&serverCallbacks);
-  auto hid = new NimBLEHIDDevice(server);
+  auto hid = new NimBLEHIDDevice(server); hidDevice = hid;
   keyboard = hid->getInputReport(1); mouse = hid->getInputReport(2);
   keyboard->setCallbacks(&reportCallbacks); mouse->setCallbacks(&reportCallbacks);
-  hid->setManufacturer("UnlikeOtherAI"); hid->setHidInfo(0, 1);
+  hid->setManufacturer("UnlikeOtherAI"); hid->setHidInfo(keyboardCountry, 1);
   hid->setReportMap(reportMap, sizeof(reportMap)); hid->setBatteryLevel(100);
   auto service = server->createService(SERVICE);
   auto config = service->createCharacteristic(CONFIG, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC, 512);

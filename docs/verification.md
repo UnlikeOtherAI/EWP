@@ -439,3 +439,47 @@ this board.
 Reading these counters needs care: opening the serial port normally resets the
 ESP32 and zeroes them, so the readings above were taken over a connection
 opened with DTR and RTS held low.
+
+### The chain, as far as a keystroke, 2 November 2026
+
+Everything up to the keystroke now runs. The board pairs with no code, takes
+Wi-Fi, serves MCP, and answers tool calls. What has not happened is a key
+press, and the reason sits on the host.
+
+| Step | How | Result |
+| --- | --- | --- |
+| Bond, no code | Connected from the Mac over BLE | `saved_hosts` 0 to 1, `authentication_state: 1`, no disconnect. No passkey prompt. |
+| macOS accepts it as a keyboard | `system_profiler SPBluetoothDataType` | Listed as `EWP Bench 1`, Minor Type Keyboard, battery 100%. |
+| Wi-Fi over the cable | `ewp-setup --port … --wifi-file …` | Joined and held: `wifi_connected: true`, `192.168.1.193`. |
+| Discoverable | `ewp-discover` | `Bench 1  keyboard  http://ewp-0cb815c55dc4.local:80/mcp`. Port 80, not 7801. |
+| MCP over Wi-Fi | `tools/call list_hosts` with the saved token | One host, `d0:11:e5:cd:33:38/0`, the Mac's own controller address. |
+| `select_host` | `tools/call` | Accepted: `selected_host` set, `state: waiting_for_selected_host`. |
+| Mac reconnects | Polled `device_status` for 40 s | `ble_connections: 1` and `authentication_state: 1`, so it is connected and encrypted. |
+| `hid_connected` | Same | Never true. The board does not take the Mac as its HID host, so `press_key` is refused. |
+
+`last_disconnect_reason: 534` is `BLE_HS_ERR_HCI_BASE + 0x16`, terminated by
+the local host: that is `select_host` dropping the peer on purpose, not a
+fault.
+
+Two candidate causes, not yet told apart:
+
+1. macOS says so itself. Its Keyboard Setup Assistant reports that the device
+   "cannot be identified and will not be usable until it is identified", and
+   the board sets `hid->setHidInfo(0, 1)` — a HID country code of 0, meaning
+   not supported. A host that will not use the keyboard has no reason to
+   subscribe to its input reports.
+2. `acceptSubscribedHost` learns about subscriptions only from `onSubscribe`.
+   NimBLE 2.3.6 exposes no way to ask whether a connection is subscribed, so if
+   a bonded peer's CCCDs are restored from the store without firing that
+   callback, the board can never know, and a reconnecting host can never
+   become the HID host however long it waits.
+
+The first is testable by giving the board a real country code or by dismissing
+the assistant; if a subscription still never arrives, the second is the
+problem, and it is the more serious of the two because it would affect every
+reconnection rather than only the first.
+
+Not verified: no key has been pressed on any host. `press_key`, `move_pointer`
+and the `notified` reporting remain untested, as does typing into a phone,
+which is the product's actual purpose and whose host stack may not demand
+layout identification the way macOS does.
