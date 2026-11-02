@@ -14,6 +14,7 @@ static const NimBLEUUID REPORT_MAP((uint16_t)0x2a4b);
 static const NimBLEUUID HID_INFO((uint16_t)0x2a4a);
 
 String lastEvent = "idle", lastReport = "", mapBeforeEncryption = "untried";
+String profileName = "android";
 int connections = 0, failures = 0, reportsSeen = 0, subscribed = 0;
 volatile bool encrypted = false;
 NimBLEAdvertisedDevice *target = nullptr;
@@ -71,6 +72,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 void report() {
   JsonDocument doc;
   doc["role"] = "test-central";
+  doc["profile"] = profileName;
   doc["event"] = lastEvent;
   doc["connections"] = connections;
   doc["failures"] = failures;
@@ -130,11 +132,39 @@ void attempt(bool probeFirst) {
   subscribeToReports();
 }
 
+// Host profiles. A phone's stack cannot be installed here, but the part that
+// decides how pairing is negotiated — IO capability, whether MITM protection
+// is demanded, whether Secure Connections is used, whether keys are kept — is
+// exactly what these set, so the board can be put through each without a phone.
+void applyProfile(const String &name) {
+  profileName = name;
+  if (name == "apple") {
+    // iOS presents as DisplayYesNo and asks for MITM protection. Against a
+    // board with no input and no output the result is still Just Works, which
+    // is the case worth proving: a host may ask for more than the board can
+    // give and must not be left hanging.
+    NimBLEDevice::setSecurityAuth(true, true, true);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_YESNO);
+  } else if (name == "legacy") {
+    NimBLEDevice::setSecurityAuth(true, false, false);   // no Secure Connections
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  } else if (name == "nobond") {
+    NimBLEDevice::setSecurityAuth(false, false, true);   // encrypt, keep nothing
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  } else if (name == "keyboard") {
+    NimBLEDevice::setSecurityAuth(true, true, true);     // expects to type a passkey
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_KEYBOARD_ONLY);
+  } else {
+    profileName = "android";
+    NimBLEDevice::setSecurityAuth(true, false, true);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   NimBLEDevice::init("EWP test central");
-  NimBLEDevice::setSecurityAuth(true, false, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  applyProfile("android");
   auto scan = NimBLEDevice::getScan();
   scan->setScanCallbacks(&scanCallbacks, false);
   scan->setActiveScan(true);
@@ -151,6 +181,10 @@ void loop() {
     if (!deserializeJson(request, line)) {
       String method = request["method"] | "";
       if (method == "status") report();
+      else if (method == "profile") {
+        applyProfile(request["name"] | "android");
+        lastEvent = String("profile ") + profileName; report();
+      }
       else if (method == "connect") { attempt(false); report(); }
       else if (method == "probe") { attempt(true); report(); }
       else if (method == "reports") {

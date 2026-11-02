@@ -851,3 +851,37 @@ and offers no way to change it afterwards, so the board does not meet that
 requirement. Whether this is what stops iOS subscribing is not established —
 it is a documented requirement the board fails, measured rather than assumed,
 and the next thing worth fixing.
+
+### Host profiles, simulated on a second board, 2 November 2026
+
+The rig can be told how to negotiate pairing before it connects. A phone's
+stack cannot be installed on an ESP32, but the part that decides whether
+pairing succeeds — IO capability, whether MITM protection is demanded, whether
+Secure Connections is used, whether keys are kept — is exactly what a profile
+sets. Each run forgets the bond on both sides first.
+`firmware/test-central/matrix.py` runs it.
+
+| Profile | What it imitates | Bonded | Encrypted | Subscribed |
+| --- | --- | --- | --- | --- |
+| `android` NoInputNoOutput, SC, bonding | a plain Just Works host | yes | yes | 2 |
+| `apple` DisplayYesNo, **MITM demanded**, SC | how iOS presents itself | yes | yes | 2 |
+| `legacy` no Secure Connections | an older stack | **no** | no | 0 |
+| `nobond` encrypts but keeps no keys | a host that will not bond | **no** | no | 0 |
+| `keyboard` KeyboardOnly, MITM | a host expecting to type a passkey | yes | yes | 2 |
+
+The Apple-shaped case is the one worth having: a host that asks for MITM
+protection against a board with no input and no output still bonds, because
+the negotiation settles on Just Works. The board does not leave such a host
+hanging, which is what the earlier failures looked like.
+
+Two profiles fail, and both are the board's own posture rather than a defect:
+it requires Secure Connections and it requires bonding. A host offering
+neither cannot pair. That is a defensible position and it is also a
+compatibility limit: an Android device old enough to lack Secure Connections
+will not pair with this board, and nothing in the tool descriptions says so.
+Whether to accept legacy pairing is an owner's decision and is not taken here.
+
+What none of this proves: these are ESP32 centrals configured to negotiate
+like a phone, not phones. They cannot reproduce what iOS does after pairing,
+which is where the real failures have been, and they are not the HID consumers
+a phone is.
