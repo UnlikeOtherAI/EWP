@@ -34,6 +34,10 @@ String deviceId, token, setupStatus = "ready";
 String keyboardName, deviceName;
 char selectedHost[32] = {};
 volatile uint32_t pairingUntil = 0;
+// Sampled by loop(); never read the bond store or the Wi-Fi driver from a
+// BLE callback. See pairingOpen() below.
+volatile int bondedHosts = 0;
+volatile bool wifiUp = false;
 volatile uint32_t identifyUntil = 0;
 volatile bool advertisingNeeded = false;
 char pairingExcluded[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
@@ -86,14 +90,20 @@ void reserveHost(const String &id) {
 // way back in short of a power cycle. Once anything is bonded the window is
 // the only way in, and a power blip no longer offers a wall of boards to the
 // room.
+// Both windows are read from BLE host callbacks, so neither may touch the
+// bond store or the Wi-Fi driver. getNumBonds() reads NVS through the store
+// and WiFi.isConnected() enters the driver; from inside onConnect or
+// permittedHost that blocks the host task, and a host task that stalls
+// mid-pairing shows up at the other end as a connection that dies of
+// supervision timeout. loop() samples both instead, where blocking is free.
 bool pairingOpen() {
-  return NimBLEDevice::getNumBonds() == 0 || static_cast<int32_t>(pairingUntil - millis()) > 0;
+  return bondedHosts == 0 || static_cast<int32_t>(pairingUntil - millis()) > 0;
 }
 // Provisioning stays open while there is no Wi-Fi to lose, for the same
 // reason: a board that never joined, or whose password changed, is otherwise
 // unreachable. It still takes an encrypted link and a bond slot.
 bool setupOpen() {
-  return !WiFi.isConnected() || static_cast<int32_t>(provisionUntil - millis()) > 0;
+  return !wifiUp || static_cast<int32_t>(provisionUntil - millis()) > 0;
 }
 bool identifyOpen() { return static_cast<int32_t>(identifyUntil - millis()) > 0; }
 String displayName() { return deviceName.isEmpty() ? deviceId : deviceName; }
@@ -610,6 +620,7 @@ void setup() {
   keyboardName = advertisedName();
   NimBLEDevice::setDeviceCallbacks(&deviceCallbacks);
   NimBLEDevice::init(keyboardName.c_str());
+  bondedHosts = NimBLEDevice::getNumBonds();
   bool selectedBonded = selectedId().isEmpty();
   for (int i=0; i<NimBLEDevice::getNumBonds(); ++i)
     if (hostId(NimBLEDevice::getBondedAddress(i)) == selectedId()) selectedBonded = true;
@@ -683,6 +694,10 @@ void loop() {
       JsonDocument names; deserializeJson(names, preferences.getString("hostnames", "{}")); names[hostEvent.id] = pendingHostName;
       String json; serializeJson(names, json); preferences.putString("hostnames", json); pendingHostName = "";
     }
+  }
+  static uint32_t sampled = 0;
+  if (static_cast<int32_t>(millis() - sampled) > 500) {
+    sampled = millis(); bondedHosts = NimBLEDevice::getNumBonds(); wifiUp = WiFi.isConnected();
   }
   static bool wasPairing = false;
   bool open = pairingOpen();
