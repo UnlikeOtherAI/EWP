@@ -684,3 +684,44 @@ the product's purpose. iOS has never completed a bond with this board, so the
 whole iOS path — pairing, provisioning from the app, and typing into it —
 remains untested. `host_action_verified` is always false and no tool confirms
 what the target did; the reading back above was done by hand.
+
+### Driving the app from outside, 2 November 2026
+
+The owner's point: if an agent cannot set this up without someone tapping, then
+anyone using it without the source has the same wall. Driving the iOS app over
+its own MCP endpoint found four things in the way of that.
+
+| Fault | What it looked like | Fixed |
+| --- | --- | --- |
+| `discover_devices` clears what it returns | `rescan()` does `nearby.removeAll()` before restarting the scan, so an agent polling the discovery tool empties the list on every call and never sees a keyboard. `get_status`, which does not rescan, showed it immediately. | No. Worked around by scanning once and reading `get_status`. |
+| No way to tell a fruitless scan from no scan | `bluetooth` reported "Looking for a keyboard…" whether or not the radio was scanning, and `rescan()` returned silently when the central was not powered on. | Yes. `bluetooth_state` and `bluetooth_scanning` are served, and `rescan()` now sets the denied or off phase instead of returning in silence. |
+| No Bluetooth in the background | There were no `UIBackgroundModes` at all, so iOS delivers no discoveries once the app is not frontmost. | Yes. `bluetooth-central`. |
+| The screen sleeping takes the device off the network | Locking suspends the app, which ends the MCP endpoint and the scan. | Partly. The idle timer is disabled while the app runs, which stops a device that is awake from falling asleep. It cannot wake a device that is already locked. |
+
+One more in the firmware, the same fault as before in the one place it was
+missed: `onConnect` called `NimBLEDevice::isBonded()`, which reads the bond
+store, on the BLE host task. The phone connected repeatedly — `connections_seen`
+10 to 15 — and every link died with `last_disconnect_reason: 520`, HCI 0x08,
+supervision timeout. loop() now samples the bonded identity addresses beside
+the bond count and `onConnect` reads the sample.
+
+#### What stops an agent setting this up alone
+
+Two things, and only the second is fixable in code.
+
+The access key. An agent has no way to obtain a device's MCP token by itself.
+The board has the USB cable as its trust anchor; the phone has nothing
+equivalent, so the key has to be carried across by a person through "Copy Agent
+Prompt" or the share sheet. The owner's proposal is the right shape: an agent
+asks the device for access, the device shows an approval prompt, and one tap
+grants it for good. That is not built.
+
+The app has to be frontmost. With the phone locked, the app's process stays
+resident — PID 63981 was alive throughout — but iOS freezes it, and the MCP
+endpoint refuses connections. Relaunching over USB with `devicectl` starts it
+but cannot unlock the device. So a wall device has to be unlocked with EWP in
+front, and that is now a requirement of the design rather than an accident.
+
+Still not verified: the phone has never completed a bond. It finds the board
+(`EWP Bench 1`, `7FFF2716-C51B-265A-75EA-3851606FD310`) and connects, and
+nothing has yet been typed into any phone or tablet.

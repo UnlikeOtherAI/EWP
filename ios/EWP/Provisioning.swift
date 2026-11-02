@@ -57,6 +57,21 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     /// Kept for the MCP surface, which reports setup state as text.
     var message: String { phase.message }
     var ready: Bool { phase == .ready }
+    /// What the radio is doing, in the words CoreBluetooth uses. `message`
+    /// reports the flow's phase, which says "Looking for a keyboard" whether or
+    /// not a scan is running, and an agent driving this from outside cannot
+    /// tell a fruitless scan from no scan at all without this.
+    var radioState: String {
+        switch central.state {
+        case .poweredOn: return "powered_on"
+        case .poweredOff: return "powered_off"
+        case .unauthorized: return "unauthorized"
+        case .unsupported: return "unsupported"
+        case .resetting: return "resetting"
+        default: return "unknown"
+        }
+    }
+    var scanning: Bool { central.isScanning }
     var selectedBluetoothID: String? { peripheral?.identifier.uuidString }
     var selectedName: String? { peripheral.map(displayName) }
 
@@ -82,7 +97,11 @@ final class Provisioning: NSObject, ObservableObject, @preconcurrency CBCentralM
     }
 
     func rescan() {
-        guard central.state == .poweredOn else { return }
+        guard central.state == .poweredOn else {
+            // Silence here looked exactly like a scan that found nothing.
+            set(central.state == .unauthorized ? .bluetoothDenied : .bluetoothOff)
+            return
+        }
         central.stopScan()
         if let peripheral, peripheral.state == .connected {
             nearby = [peripheral]

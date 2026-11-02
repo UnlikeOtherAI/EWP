@@ -28,6 +28,11 @@ targets:
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: EWP advertises its own MCP server and discovers keyboards on your local network.
         NSBluetoothAlwaysUsageDescription: EWP configures your ESP32's Wi-Fi connection over Bluetooth.
+        # A device on the wall is not in anyone's hand. Without this, iOS stops
+        # delivering Bluetooth discoveries as soon as the app is not frontmost,
+        # and an agent calling discover_devices gets an empty list with nothing
+        # to say why.
+        UIBackgroundModes: [bluetooth-central]
         NSBonjourServices: ['_mcp._tcp']
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

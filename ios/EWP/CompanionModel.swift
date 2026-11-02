@@ -349,7 +349,8 @@ final class CompanionModel: ObservableObject {
          "screen_mcp_port": 7802, "bluetooth": provisioning.message, "wifi_setup_ready": provisioning.ready, "selected_keyboard": provisioning.selectedBluetoothID ?? "",
          "nearby_keyboards": provisioning.nearby.map { ["bluetooth_id": $0.identifier.uuidString, "name": provisioning.displayName($0)] },
          "mcp_devices": discovery.services.map { ["name": $0.name, "endpoint": $0.url.absoluteString, "role": $0.role] },
-         "discovery_error": discovery.error ?? ""]
+         "discovery_error": discovery.error ?? "",
+         "bluetooth_state": provisioning.radioState, "bluetooth_scanning": provisioning.scanning]
     }
 
     private func call(_ name: String, _ args: [String: Any]) async throws -> [[String: Any]] {

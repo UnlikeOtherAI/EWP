@@ -41,6 +41,12 @@ volatile uint32_t pairingUntil = 0;
 // BLE callback. See pairingOpen() below.
 volatile int bondedHosts = 0;
 volatile bool wifiUp = false;
+// The bonded identity addresses, sampled by loop() beside the count above.
+// NimBLEDevice::isBonded() reads the bond store, which is NVS, and onConnect
+// runs on the BLE host task: the read blocks the callback and the link dies of
+// supervision timeout before pairing can finish. Same fault as pairingOpen()
+// had, in the one place it was left.
+char bondedIds[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
 volatile uint32_t identifyUntil = 0;
 volatile bool advertisingNeeded = false;
 char pairingExcluded[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
@@ -88,6 +94,14 @@ uint16_t getHid() {
 
 String hostId(const NimBLEAddress &address) {
   return String(address.toString().c_str()) + "/" + String(address.getType());
+}
+// Reads the sample, never the store. See bondedIds.
+bool knownBond(const String &id) {
+  bool known = false;
+  portENTER_CRITICAL(&hidMux);
+  for (auto &entry : bondedIds) if (id == entry) known = true;
+  portEXIT_CRITICAL(&hidMux);
+  return known;
 }
 String selectedId() {
   char copy[32]; portENTER_CRITICAL(&hidMux); memcpy(copy, selectedHost, sizeof(copy)); portEXIT_CRITICAL(&hidMux);
@@ -414,7 +428,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     ++connectionsSeen; authenticationState = 0;
     if (pairingOpen()) {
-      if (NimBLEDevice::isBonded(info.getIdAddress())) {
+      if (knownBond(hostId(info.getIdAddress()))) {
         // Parked, so it never takes the pairing slot. The controller allows
         // three links at once; the last one stays free for the new phone.
         bool reserved;
@@ -806,6 +820,10 @@ void loop() {
   static uint32_t sampled = 0;
   if (static_cast<int32_t>(millis() - sampled) > 500) {
     sampled = millis(); bondedHosts = NimBLEDevice::getNumBonds(); wifiUp = WiFi.isConnected();
+    char sample[CONFIG_BT_NIMBLE_MAX_BONDS][32] = {};
+    for (int i = 0; i < bondedHosts && i < CONFIG_BT_NIMBLE_MAX_BONDS; ++i)
+      strlcpy(sample[i], hostId(NimBLEDevice::getBondedAddress(i)).c_str(), 32);
+    portENTER_CRITICAL(&hidMux); memcpy(bondedIds, sample, sizeof(sample)); portEXIT_CRITICAL(&hidMux);
   }
   static bool wasPairing = false;
   bool open = pairingOpen();
