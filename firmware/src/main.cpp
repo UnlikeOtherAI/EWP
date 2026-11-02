@@ -678,6 +678,12 @@ void serialSetup() {
           strlcpy(config.password, password.c_str(), sizeof(config.password));
           xQueueOverwrite(configurationQueue, &config); reply["submitted"] = true;
         } else reply["error"] = "Invalid Wi-Fi configuration";
+      } else if (method == "open_pairing") {
+        // Physical access to the cable is ownership of the board, and without
+        // this a board with one bond and no Wi-Fi can be paired to nothing
+        // else: start_pairing is an MCP call, and MCP needs the Wi-Fi that the
+        // bonded host was supposed to deliver in the first place.
+        beginPairing(reply);
       } else if (method == "status") appendStatus(reply);
       else reply["error"] = "Unknown USB setup command";
       serializeJson(reply, Serial); Serial.println();
