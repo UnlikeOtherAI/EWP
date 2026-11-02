@@ -907,3 +907,33 @@ its own schedule and nothing on the board can hurry it. `select_host` reserves
 input; it does not summon the host. On a wall that is the difference between a
 device that is ready and one that is merely selected, and an agent should poll
 `device_status` rather than assume.
+
+### Where autonomous iOS setup stops, 2 November 2026
+
+The iPad was driven from here over its own MCP endpoint, with a pairing window
+open on the keyboard. It found the board — `EWP Bench 1` — and connected, and
+the board counted the connection. The app then said:
+
+> The keyboard is on Wi-Fi. Pair it in Settings → Bluetooth.
+
+That is the product telling the truth about itself. The app's Bluetooth
+connection exists to hand over Wi-Fi; it is not, and cannot be, a HID pairing.
+Punchthrough's write-up on BLE HID across platforms says iOS does not let
+third-party apps see or touch HID GATT profiles, which matches what was seen
+earlier: `0x1812` was absent from a GATT enumeration on macOS while the board
+was plainly advertising it.
+
+So the first HID pairing of an iOS device is a tap in Settings, by a person,
+and nothing in the firmware or the app can remove it. That is an operating
+system boundary, not a gap in the implementation. It is worth stating in the
+product's own documentation rather than discovered by each new owner: a wall
+of iOS devices needs one tap per device, once.
+
+What that leaves verified and unverified is now sharply divided. The board
+side is proven: a host that has never seen it bonds with no code, keystrokes
+arrive byte for byte, five host profiles including an Apple-shaped one
+negotiate correctly, input follows a switch and does not leak to the host that
+was selected before. **No iOS device has completed a HID bond, and nothing has
+been typed into a phone or tablet.** Every iOS failure up to now had a cause on
+the board, and those causes are fixed; whether any remain on the iOS side can
+only be found out after that one tap.
