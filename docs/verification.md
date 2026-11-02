@@ -85,6 +85,34 @@ is no layout before and after to show for them.
 | Advanced | iPhone 16 Pro Max simulator | Passed; follows the new palette through the shared design system. |
 | App icon | `design/make_icon.py`, contact sheet at 1024 to 40 px | Passed; the lit phone still reads at 40 px. |
 
+### Laid out from the space it has, 2 November 2026
+
+The home screen no longer branches on the horizontal size class. It measures
+the space it is actually given and decides from that, because the size class
+describes none of the cases that matter here: an iPad in a narrow split is a
+phone, an iPhone Duo is a short wide screen, and a phone in landscape has less
+height than the field alone would like.
+
+| Rule | Why |
+| --- | --- |
+| Two columns at 620 pt and wider | Below that there is not room for two readable measures side by side. |
+| Headline drops to 78% when a column is under 330 pt | Splitting a 678 pt screen leaves columns narrower than a phone's; the headline is the one thing that cannot wrap its way out. |
+| Field height is 45% of the viewport beside the blocks, 348 pt above them, never under 236 pt | It grows with a tall iPad instead of stranding one block at the top of a void, and never swallows a short screen. |
+
+| Check | Host / source | Result |
+| --- | --- | --- |
+| iPhone, portrait | iPhone 16 Pro Max simulator | Single column, unchanged. |
+| iPhone, landscape | iPhone 16 Pro Max simulator, 956 × 440 | Two columns, field reduced to fit the height. |
+| iPad, full screen | iPad Air 13 M3 simulator | Two columns; the field now carries the height rather than leaving it empty. |
+| Install on the owner's devices | Physical iPhone 16 Pro Max and iPad Air 13 M3, over USB | Installed and launched on the phone. |
+
+**iPhone Duo is not verified.** Its simulator is booted and has the build
+installed, but its screen will not render for a screenshot without the device
+panel, and access to that device has not been granted, so the layout has only
+been reasoned about from its dimensions — 1398 × 2034 px, 678 × 466 pt, wider
+and far shorter than any other iPhone. By the rules above that puts it in two
+columns with a reduced headline and a 346 pt field. Nothing has confirmed it.
+
 Not verified: the waiting state was not captured, Dynamic Type above the
 default was not exercised beyond the headline's `ScaledMetric`, and no
 physical device has run this build.

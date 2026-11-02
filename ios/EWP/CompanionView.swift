@@ -6,7 +6,6 @@ import SwiftUI
 struct CompanionView: View {
     @StateObject private var model = CompanionModel()
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showSetup = false
     @State private var poll: Task<Void, Never>?
 
@@ -16,36 +15,38 @@ struct CompanionView: View {
         poll = Task { await model.run() }
     }
 
-    private var isWide: Bool { sizeClass == .regular }
-
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: Theme.cardSpacing) {
-                    header
-                    if isWide {
-                        // An iPad has room to show the field beside the two
-                        // quiet blocks instead of above them. Equal explicit
-                        // widths: left to negotiate, the columns size to their
-                        // text and long messages get truncated.
-                        HStack(alignment: .top, spacing: Theme.cardSpacing) {
-                            ShareField(model: model, prominent: true)
+            GeometryReader { geometry in
+                let layout = Layout(size: geometry.size)
+                ScrollView {
+                    VStack(spacing: Theme.cardSpacing) {
+                        header
+                        if layout.twoColumn {
+                            // With room for two readable measures the field
+                            // goes beside the quiet blocks rather than above
+                            // them. Equal explicit widths: left to negotiate,
+                            // the columns size to their text and long messages
+                            // get truncated.
+                            HStack(alignment: .top, spacing: Theme.cardSpacing) {
+                                ShareField(model: model, layout: layout)
+                                    .frame(maxWidth: .infinity)
+                                VStack(spacing: Theme.cardSpacing) {
+                                    AgentBlock(model: model)
+                                    KeyboardBlock(model: model, showSetup: $showSetup)
+                                }
                                 .frame(maxWidth: .infinity)
-                            VStack(spacing: Theme.cardSpacing) {
-                                AgentBlock(model: model)
-                                KeyboardBlock(model: model, showSetup: $showSetup)
                             }
-                            .frame(maxWidth: .infinity)
+                        } else {
+                            ShareField(model: model, layout: layout)
+                            AgentBlock(model: model)
+                            KeyboardBlock(model: model, showSetup: $showSetup)
                         }
-                    } else {
-                        ShareField(model: model)
-                        AgentBlock(model: model)
-                        KeyboardBlock(model: model, showSetup: $showSetup)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 32)
+                    .readableColumn(wide: layout.twoColumn)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 32)
-                .readableColumn(wide: isWide)
             }
             .signalBackground()
             .toolbar(.hidden, for: .navigationBar)
@@ -90,12 +91,42 @@ struct CompanionView: View {
     }
 }
 
+/// The home screen is laid out from the space it is actually given, not from
+/// the size class. An iPad in a narrow split is a phone; an iPhone Duo is a
+/// short wide screen that no size class describes; and a phone in landscape
+/// has less height than the field alone would like.
+struct Layout {
+    let twoColumn: Bool
+    let fieldHeight: CGFloat
+    let padding: CGFloat
+    /// Applied to the headline, which is the one thing that cannot simply
+    /// wrap its way out of a narrow column.
+    let titleScale: CGFloat
+
+    init(size: CGSize) {
+        // Two readable measures side by side, plus the gutter between them.
+        twoColumn = size.width >= 620
+        padding = twoColumn ? 26 : 22
+        // Splitting a 678 pt screen leaves columns narrower than a phone's,
+        // so the headline comes down with them rather than overflowing.
+        let column = twoColumn ? (size.width - 46) / 2 : size.width - 32
+        titleScale = column < 330 ? 0.78 : 1
+        // The field never takes the whole viewport: on a short screen the
+        // blocks under it have to stay in sight without scrolling for them.
+        // Beside them, though, it grows with the screen, so a tall iPad does
+        // not leave the one important block stranded at the top of a void.
+        let ceiling = twoColumn ? max(400, size.height * 0.45) : 348
+        let room = size.height - (twoColumn ? 120 : 300)
+        fieldHeight = min(ceiling, max(236, room))
+    }
+}
+
 // MARK: - Screen sharing
 
 /// The one block that is allowed to use the colour, and only when live.
 private struct ShareField: View {
     @ObservedObject var model: CompanionModel
-    var prominent = false
+    var layout: Layout
     @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 44
 
     private var live: Bool { model.sharing == .live }
@@ -104,13 +135,16 @@ private struct ShareField: View {
         VStack(alignment: .leading, spacing: 0) {
             BlockLabel(title: "Screen sharing", tint: labelTint) { beacon }
             Text(title)
-                .font(.system(size: titleSize, weight: .semibold))
+                .font(.system(size: titleSize * layout.titleScale, weight: .semibold))
                 .tracking(-1.9)
                 .foregroundStyle(live ? Theme.onLive : Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
+                // A long word in a narrow column, or a large accessibility
+                // size, shrinks the headline instead of clipping it.
+                .minimumScaleFactor(0.6)
                 // Held to a measure so it breaks into two lines rather than
                 // running the width of the field as one thin headline.
-                .frame(maxWidth: live ? 350 : 300, alignment: .leading)
+                .frame(maxWidth: layout.twoColumn ? .infinity : (live ? 350 : 300), alignment: .leading)
                 .padding(.top, 18)
             Text(detail)
                 .font(.system(size: 15.5))
@@ -131,8 +165,8 @@ private struct ShareField: View {
             }
             action
         }
-        .padding(prominent ? 26 : 22)
-        .frame(maxWidth: .infinity, minHeight: prominent ? 400 : 348, alignment: .topLeading)
+        .padding(layout.padding)
+        .frame(maxWidth: .infinity, minHeight: layout.fieldHeight, alignment: .topLeading)
         .background {
             RoundedRectangle(cornerRadius: Theme.fieldRadius, style: .continuous)
                 .fill(live ? Theme.live : Theme.standby)
