@@ -534,12 +534,54 @@ description says this; so does the tool's own reply.
 | App builds | `xcodebuild` for the iPhone simulator | Succeeds. |
 | Region map | `xcodebuild test -only-testing:EWPTests` | 7 tests, 0 failures. Covers the regions that do not match their language (Austria German, Ireland British, Australia and India US), case folding, and the fallback for unmapped, empty and nil regions. |
 
-Not verified: nothing here has run on the board. `set_layout` has not been
-called against real firmware, the stored code has not been read back across a
-reboot, and no host has been observed accepting the new country code or
-dropping the Keyboard Setup Assistant — that needs a flash, and the cable was
-in use by other work. The picker has not been seen rendered, because the step
-only appears once a board is on Wi-Fi and reachable over MCP.
+#### On the board
+
+Flashed to `ewp-0cb815c55dc4` and driven over its MCP endpoint rather than the
+cable, because opening the serial port resets the ESP32 and would have ended
+each observation before it started.
+
+| Check | Result |
+| --- | --- |
+| Default on a board with nothing stored | `keyboard_layout: iso`, `keyboard_layout_code: 13`. |
+| `set_layout` by name | `{"layout": "cz"}` returned code 5 and `device_status` agreed. |
+| Persistence across a reboot | After reflashing, which reboots the board, `keyboard_layout: cz`, code 5. Read from NVS, not a default. |
+| The bond survives a flash | `saved_hosts: 1` and `selected_host` unchanged throughout. |
+
+#### Whether the country code was what macOS was objecting to
+
+It was, on this evidence, though the two changes were not isolated from each
+other and the honest reading is below.
+
+With the code at 0, across two boots, the Mac bonded and encrypted
+(`authentication_state: 1`) and stayed connected, and `subscribe_events`
+remained **0** while `accept_rejections` reached 4. The host never wrote a
+CCCD at all. That rules out the board losing track of a subscription it had
+been told about: there was nothing to lose. NimBLE forwards restored
+subscriptions through the same `onSubscribe` path as new ones
+(`NimBLEServer.cpp`, `BLE_GAP_EVENT_SUBSCRIBE`), so a silently restored CCCD
+would still have been counted.
+
+After the code became non-zero and `persistLayout` signalled Service Changed,
+the next reconnect gave `subscribe_events: 2`, `persisted_subscriptions: 5`,
+and **`hid_connected: true`** for host `d0:11:e5:cd:33:38/0` — the first time
+this board has ever had a subscribed host.
+
+What stops this being a clean single-variable result: the subscription did not
+appear the moment the code changed. It appeared on the reconnect after that,
+so the reboot and the cache invalidation are tangled with the code change. A
+host that has already discovered a board caches its HID Information, and macOS
+appears to act on Service Changed by invalidating rather than re-reading
+immediately. The sequence that works is: set a non-zero code, signal Service
+Changed, let the host reconnect.
+
+Not verified: no key has been pressed. `hid_connected` is true and `press_key`
+would now be accepted, but the frontmost window on the only bonded host was
+the user's own chat, and a keystroke goes wherever focus happens to be. That
+test needs a target someone has chosen on purpose.
+
+The picker has also not been seen rendered, because the step only appears once
+a board is on Wi-Fi and reachable over MCP, and because reaching it needs this
+device to hold the board's token.
 
 One limit of the app path worth naming: the picker calls `set_layout` over the
 board's MCP endpoint, so it needs the board on Wi-Fi *and* this device holding

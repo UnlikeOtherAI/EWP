@@ -32,7 +32,7 @@ struct Configuration { char ssid[33]; char password[65]; };
 QueueHandle_t configurationQueue;
 Preferences preferences;
 WebServer http(80);
-NimBLECharacteristic *keyboard, *mouse, *statusCharacteristic;
+NimBLECharacteristic *keyboard, *mouse, *statusCharacteristic, *bootKeyboard = nullptr;
 String deviceId, token, setupStatus = "ready";
 String keyboardName, deviceName;
 char selectedHost[32] = {};
@@ -86,6 +86,15 @@ uint16_t getHid() {
   portENTER_CRITICAL(&hidMux); auto handle = hidHandle; portEXIT_CRITICAL(&hidMux); return handle;
 }
 
+// A host subscribes to the report-mode characteristic or to the boot one,
+// not usefully to both, so a report goes to whichever it took. notify()
+// against an unsubscribed characteristic is a no-op returning false, so this
+// is the OR of the two and not the AND.
+bool notifyKeyboard(const uint8_t *report, size_t length, uint16_t target) {
+  bool sent = keyboard->notify(report, length, target);
+  if (bootKeyboard) sent = bootKeyboard->notify(report, length, target) || sent;
+  return sent;
+}
 String hostId(const NimBLEAddress &address) {
   return String(address.toString().c_str()) + "/" + String(address.getType());
 }
@@ -248,6 +257,13 @@ void appendStatus(JsonDocument &doc) {
   doc["subscribe_events"] = subscribeEvents;
   doc["accept_attempts"] = acceptAttempts;
   doc["accept_rejections"] = acceptRejections;
+  // Counted from the bond store, not from onSubscribe: if a host subscribed
+  // in an earlier session the CCCD is persisted, and NimBLE restores it on
+  // reconnect. A nonzero count here beside subscribe_events 0 would mean the
+  // board had simply stopped being told. Safe to read here because status is
+  // built on the HTTP and serial tasks, never inside a BLE callback.
+  { int cccds = 0; ble_store_util_count(BLE_STORE_OBJ_TYPE_CCCD, &cccds);
+    doc["persisted_subscriptions"] = cccds; }
   { uint8_t bits = 0; int live = 0;
     for (auto &entry : subscriptions) if (entry.handle != BLE_HS_CONN_HANDLE_NONE) { ++live; bits |= entry.reports; }
     doc["subscription_slots"] = live; doc["subscription_reports"] = bits; }
@@ -333,9 +349,9 @@ bool beginIdentify(int seconds, JsonDocument &out) {
     // without typing anything into it, which is what shows the operator the
     // controller-to-phone binding.
     uint8_t report[8] = {0x01, 0,0,0,0,0,0,0};
-    woke = keyboard->notify(report, sizeof(report), target); delay(20);
+    woke = notifyKeyboard(report, sizeof(report), target); delay(20);
     memset(report, 0, sizeof(report));
-    woke = keyboard->notify(report, sizeof(report), target) && woke;
+    woke = notifyKeyboard(report, sizeof(report), target) && woke;
   }
   out["identifying_seconds"] = seconds; out["bluetooth_name"] = keyboardName; out["host_notified"] = woke;
   out["note"] = "This board has no user LED. It advertises under the Bluetooth name above for the duration, and woke the screen of the host it drives with a modifier-only key.";
@@ -462,7 +478,8 @@ class DeviceCallbacks : public NimBLEDeviceCallbacks {
 class ReportCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *report, NimBLEConnInfo &info, uint16_t value) override {
     for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle()) {
-      uint8_t bit = report == keyboard ? 1 : 2;
+      // The boot keyboard report is the keyboard, as far as routing goes.
+      uint8_t bit = (report == keyboard || report == bootKeyboard) ? 1 : 2;
       ++subscribeEvents;
       if (value) entry.reports |= bit; else entry.reports &= ~bit;
       if (!entry.reports && getHid() == info.getConnHandle()) setHid(BLE_HS_CONN_HANDLE_NONE);
@@ -632,8 +649,8 @@ void handleMCP() {
           out["error"] = "Invalid HID usage or modifiers"; failed = true;
         } else {
           uint8_t report[8] = {static_cast<uint8_t>(args["modifiers"] | 0), 0, static_cast<uint8_t>(args["usage"].as<int>()), 0,0,0,0,0};
-          bool sent = keyboard->notify(report, sizeof(report), target); delay(20);
-          memset(report, 0, sizeof(report)); bool released = keyboard->notify(report, sizeof(report), target);
+          bool sent = notifyKeyboard(report, sizeof(report), target); delay(20);
+          memset(report, 0, sizeof(report)); bool released = notifyKeyboard(report, sizeof(report), target);
           out["notified"] = sent && released; out["host_action_verified"] = false;
           out["sequence"] = ++inputSequence; out["sent_ms"] = millis(); failed = !(sent && released);
         }
@@ -718,7 +735,16 @@ void setup() {
   auto server = NimBLEDevice::createServer(); server->setCallbacks(&serverCallbacks);
   auto hid = new NimBLEHIDDevice(server); hidDevice = hid;
   keyboard = hid->getInputReport(1); mouse = hid->getInputReport(2);
+  // A keyboard that offers only report-protocol characteristics is incomplete
+  // to a host that wants boot protocol, and macOS is such a host: it bonded,
+  // encrypted, read the service, and then subscribed to nothing at all, which
+  // is what "cannot be identified and will not be usable" amounted to. The
+  // boot keyboard report carries the same eight bytes as report 1, so
+  // whichever one the host chooses is answered.
+  bootKeyboard = hid->getBootInput();
+  hid->getBootOutput();
   keyboard->setCallbacks(&reportCallbacks); mouse->setCallbacks(&reportCallbacks);
+  bootKeyboard->setCallbacks(&reportCallbacks);
   hid->setManufacturer("UnlikeOtherAI"); hid->setHidInfo(keyboardCountry, 1);
   hid->setReportMap(reportMap, sizeof(reportMap)); hid->setBatteryLevel(100);
   auto service = server->createService(SERVICE);
