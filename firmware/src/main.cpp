@@ -383,7 +383,20 @@ void acceptSubscribedHost(NimBLEConnInfo &info) {
   // decision: a Just Works bond is never authenticated, and asking for it
   // here meant a phone could bond and subscribe and still never be taken as
   // the host, which looks from the phone like pairing that does not stick.
-  if (!subscribed || !info.isEncrypted()) { ++acceptRejections; return; }
+  //
+  // A bond stands in for the subscription. A host that has subscribed once
+  // does not write its CCCDs again: NimBLE restores them from its store on
+  // reconnection without an onSubscribe callback, so a board that learns of
+  // subscriptions only from that callback never finds out, and every
+  // reconnection after the first leaves the host unusable. Measured on this
+  // board: persisted_subscriptions 5, subscribe_events 0, host connected and
+  // encrypted, hid_connected false for as long as it was left.
+  //
+  // Nothing is overclaimed by accepting it: notify() returns whether the
+  // report actually went out, and that return is what press_key reports as
+  // `notified`, so a host that is not really listening is reported as not
+  // having been sent to.
+  if ((!subscribed && !info.isBonded()) || !info.isEncrypted()) { ++acceptRejections; return; }
   if (parkedPeer(info)) return;
   uint16_t current = getHid();
   if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
