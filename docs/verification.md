@@ -1018,3 +1018,41 @@ allocation, on a board at 87% of its flash — and serves them newest last:
 It records what the board sent, not what the target did with it, and the tool
 description says so. The app does not show it yet; that is the half still
 missing, and the one the owner was pointing at.
+
+### Changing the layout on a live connection, 2 November 2026
+
+`firmware/test-central/layout.py`, with the rig connected and subscribed
+throughout:
+
+| Step | Board says | Rig reads from the HID information characteristic |
+| --- | --- | --- |
+| before | `cz` | country 5 |
+| `set_layout` to `us` while connected | `us`, code 33 | **country 33**, still connected |
+| after a reconnect | `us` | country 33 |
+
+So the characteristic changes immediately and a host that re-reads it sees the
+new layout without reconnecting. That corrects what was recorded earlier from
+a sibling session, which concluded the change only appeared on the next
+connection: the value was changing all along, and what did not change was
+macOS's cached copy. `set_layout` already fires a Service Changed indication;
+whether a host acts on it is the host's business, and macOS evidently does not
+re-read.
+
+The honest summary for the tool description: the board serves the new layout
+at once, every host that asks again gets it, and a host that cached the old
+one keeps it until something makes it look again.
+
+### Reading back what a device received, 2 November 2026
+
+`received_input` on the iOS app reports what a hardware keyboard actually sent
+it: the HID usage, the modifier bitmask translated into HID order rather than
+Apple's own flag values, the characters produced, and the eight report bytes a
+keyboard would have put on the wire. It is the other end of `press_key`, so
+what was sent can be compared with what arrived, which is what
+`host_action_verified` has never been able to say.
+
+Served and answering on the iPad; no keystroke has yet been read back through
+it, because the bonded host is the phone and the phone cannot be reinstalled
+over the network. The limit is iOS's and is stated in the tool description: an
+app receives key events only while it is frontmost, so typing into another app
+is invisible here, and no background mode changes that.

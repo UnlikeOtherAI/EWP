@@ -38,6 +38,7 @@ struct CompanionView: View {
                     .readableColumn(wide: layout.twoColumn)
                 }
             }
+            .background(KeyCatcher(log: model.received).frame(width: 0, height: 0))
             .signalBackground()
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { model.rescan() }

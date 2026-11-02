@@ -15,6 +15,7 @@ static const NimBLEUUID HID_INFO((uint16_t)0x2a4a);
 
 String lastEvent = "idle", lastReport = "", mapBeforeEncryption = "untried";
 String profileName = "android";
+int hidCountry = -1;   // the country byte last read from the HID information characteristic
 int connections = 0, failures = 0, reportsSeen = 0, subscribed = 0;
 volatile bool encrypted = false;
 NimBLEAdvertisedDevice *target = nullptr;
@@ -73,6 +74,7 @@ void report() {
   JsonDocument doc;
   doc["role"] = "test-central";
   doc["profile"] = profileName;
+  doc["hid_country"] = hidCountry;
   doc["event"] = lastEvent;
   doc["connections"] = connections;
   doc["failures"] = failures;
@@ -103,6 +105,20 @@ static void probeBeforeEncryption() {
   NimBLEAttValue value = map->readValue();
   mapBeforeEncryption = value.length() ? String("readable, ") + value.length() + " bytes"
                                        : "refused or empty";
+}
+
+// Read the HID information characteristic. Its third byte is the country
+// code, which is what set_layout changes, so this answers whether a layout
+// change reaches a host that is already connected or only the next one.
+static void readHidCountry() {
+  hidCountry = -1;
+  if (!held || !held->isConnected()) return;
+  auto hid = held->getService(HID_SERVICE);
+  if (!hid) return;
+  auto info = hid->getCharacteristic(HID_INFO);
+  if (!info) return;
+  NimBLEAttValue value = info->readValue();
+  if (value.length() >= 3) hidCountry = value.data()[2];
 }
 
 static void subscribeToReports() {
@@ -181,6 +197,7 @@ void loop() {
     if (!deserializeJson(request, line)) {
       String method = request["method"] | "";
       if (method == "status") report();
+      else if (method == "hidinfo") { readHidCountry(); report(); }
       else if (method == "profile") {
         applyProfile(request["name"] | "android");
         lastEvent = String("profile ") + profileName; report();

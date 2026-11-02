@@ -31,6 +31,9 @@ final class CompanionModel: ObservableObject {
     @Published var ssid = ""
     @Published var password = ""
     @Published var captureLive = false
+    /// What a hardware keyboard has actually sent this device. The other half
+    /// of `press_key`: one end reports what went out, this reports what landed.
+    let received = ReceivedInput()
     @Published private(set) var sharing: SharingPhase = .off
     @Published var serverStatus = "Starting…"
     @Published private(set) var serverReady = false
@@ -126,6 +129,8 @@ final class CompanionModel: ObservableObject {
                 MCPTool(name: "identify", description: "Make this device announce itself on screen so a person can find it physically.",
                         properties: ["seconds": ["type": "integer", "minimum": 1, "maximum": 30]], required: []),
                 MCPTool(name: "get_status", description: "Read this iPhone/iPad's MCP, screen-sharing and ESP32 setup state."),
+                MCPTool(name: "received_input", description: "What a hardware keyboard actually sent this device: HID usage, the modifier bitmask in HID order, the characters produced, and the eight report bytes. This is the other end of the keyboard's press_key, so what was sent can be compared with what arrived. It only sees keys while EWP is in front and holding focus, because iOS delivers key events to no other app; typing into something else is invisible here. Pass clear to start a fresh log.",
+                        properties: ["clear": ["type": "boolean"]], required: []),
                 MCPTool(name: "get_screen", description: "Get this app's screen, or the shared device screen when a broadcast is live."),
                 MCPTool(name: "start_screen_sharing", description: "Open Apple's screen-sharing confirmation on this device. Success means the dialog was requested; check get_status for live frames."),
                 MCPTool(name: "stop_screen_sharing", description: "Stop this device's active screen-sharing broadcast."),
@@ -370,6 +375,25 @@ final class CompanionModel: ObservableObject {
         case "get_status":
             await refreshCaptureState()
             return try MCPServer.text(status())
+        case "received_input":
+            if args["clear"] as? Bool == true { received.clear() }
+            return try MCPServer.text([
+                "total_since_launch": received.total,
+                "kept": received.presses.count,
+                "frontmost_only": "iOS delivers key events only to the app in front; anything typed elsewhere is not here.",
+                "entries": received.presses.map { press in
+                    [
+                        "key": press.label,
+                        "usage": press.usage,
+                        "modifiers": press.modifiers,
+                        "modifier_names": press.modifierNames,
+                        "characters": press.characters,
+                        "characters_ignoring_modifiers": press.unmodified,
+                        "report_bytes": press.reportBytes,
+                        "seconds_ago": Int(Date().timeIntervalSince(press.at)),
+                    ] as [String: Any]
+                },
+            ])
         case "discover_devices":
             rescan()
             await refreshCaptureState()
