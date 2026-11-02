@@ -937,3 +937,25 @@ was selected before. **No iOS device has completed a HID bond, and nothing has
 been typed into a phone or tablet.** Every iOS failure up to now had a cause on
 the board, and those causes are fixed; whether any remain on the iOS side can
 only be found out after that one tap.
+
+### Recovering from a shut pairing window, 2 November 2026
+
+A person tapping in a target's Bluetooth settings gets "pairing unsuccessful,
+it took too long" when no window is open, and the board says nothing. That is
+what happened on the iPad: `pairing_open` was false, the window having expired
+180 seconds after a test opened it, and the tap came minutes later.
+
+The window cannot be opened by the person doing the tapping — it is an MCP
+call — so the two have to be synchronised to within three minutes or the
+attempt fails with a message that blames the wrong thing. Two changes:
+
+| Change | Why |
+| --- | --- |
+| `start_pairing` takes `seconds`, 30 to 900, default 180 | So the window can be opened wide enough for someone to walk to the device. |
+| `device_status` reports `pairing_attempts_refused` and `seconds_since_refused_pairing` | So a refusal is a state that can be read and acted on, instead of a silent dead end. |
+
+The counter only rises for an unbonded host turned away because the window was
+shut. It going up means a person is at the device trying to pair and being told
+it took too long, and `help` now says so and says what to do: open a window and
+ask them to try again. The board recovers by reporting what it refused, rather
+than leaving a person to guess.

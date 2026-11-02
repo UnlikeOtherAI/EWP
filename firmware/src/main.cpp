@@ -39,6 +39,13 @@ char selectedHost[32] = {};
 volatile uint32_t pairingUntil = 0;
 // Sampled by loop(); never read the bond store or the Wi-Fi driver from a
 // BLE callback. See pairingOpen() below.
+// Someone standing at the device tapping in its Bluetooth settings cannot
+// open a pairing window: that is an MCP call. When the window is shut they get
+// "pairing unsuccessful, it took too long" and the board says nothing at all.
+// Counting the refusals turns a silent dead end into a state an agent can read
+// and act on, which is the only way this recovers without a person guessing.
+volatile int refusedPairings = 0;
+volatile uint32_t lastRefusedPairing = 0;
 volatile int bondedHosts = 0;
 volatile bool wifiUp = false;
 // The bonded identity addresses, sampled by loop() beside the count above.
@@ -244,7 +251,8 @@ void appendHelp(JsonDocument &doc) {
   care.add(String("This board holds ") + CONFIG_BT_NIMBLE_MAX_BONDS + " bonds and never deletes one by itself. When it is full, or store_full is true because the hosts' subscriptions filled its store, start_pairing fails; call forget_host to free a slot.");
   care.add("forget_host removes only this board's side of a bond. The target keeps its own until a person removes it there, and until then it fails to reconnect.");
   care.add("set_layout declares which physical layout a host should assume these keys are in. It does not translate anything: press_key sends a HID usage, and what that usage types is decided by the layout the host itself is set to. Typing arbitrary text still needs a character-to-usage map for that layout, which this board does not have.");
-  care.add("Pairing takes no code. A board with no bonds stays pairable so it can be set up at all; once one host is bonded, only a start_pairing window lets another in, and it lasts 180 seconds.");
+  care.add("Pairing takes no code. A board with no bonds stays pairable so it can be set up at all; once one host is bonded, only a start_pairing window lets another in.");
+  care.add("pairing_attempts_refused in device_status counts hosts turned away because no window was open. It going up means a person is at the device trying to pair and being told it took too long. They cannot open the window themselves, so open one and tell them to try again.");
   appendLayouts(doc);
   doc["seeing_the_screen"] = "This board has no camera or screen access. If the target is an iPhone or iPad running EWP, browse _mcp._tcp.local. for a service whose role TXT record is 'app' on the same device, and use its get_screen tool.";
   doc["discovery"] = "This endpoint advertises _mcp._tcp.local. with TXT records id, name, role, path and fw. The name record falls back to the id until set_name is called. Credentials are never advertised.";
@@ -264,6 +272,11 @@ void appendStatus(JsonDocument &doc) {
   doc["security_request_result"] = securityRequestResult;
   { uint16_t held; portENTER_CRITICAL(&hidMux); held = pairingHandle; portEXIT_CRITICAL(&hidMux);
     doc["pairing_slot_taken"] = held != BLE_HS_CONN_HANDLE_NONE; }
+  doc["pairing_attempts_refused"] = refusedPairings;
+  if (refusedPairings) {
+    doc["seconds_since_refused_pairing"] = (millis() - lastRefusedPairing) / 1000;
+    doc["refused_pairing_hint"] = "An unbonded host tried to pair while the window was shut; it will have reported that pairing took too long. Call start_pairing, with enough seconds for whoever is tapping, and ask them to try again.";
+  }
   doc["subscribe_events"] = subscribeEvents;
   doc["accept_attempts"] = acceptAttempts;
   doc["accept_rejections"] = acceptRejections;
@@ -283,7 +296,13 @@ void appendStatus(JsonDocument &doc) {
   if (!selectedId().isEmpty() && getHid() == BLE_HS_CONN_HANDLE_NONE) doc["state"] = "waiting_for_selected_host";
   else if (selectedId().isEmpty() && lastError == "selected_host_missing") doc["state"] = "selected_host_missing";
 }
-bool beginPairing(JsonDocument &out) {
+// seconds: how long the window stays open. The default of 180 assumes the
+// person tapping in the target's Bluetooth settings is standing next to
+// whoever called this. They usually are not: the window is an MCP call and
+// cannot be opened by the person doing the tapping, so a short one means the
+// two have to be synchronised to within three minutes or the host is refused
+// and reports that pairing took too long. Fifteen minutes is the ceiling.
+bool beginPairing(JsonDocument &out, uint32_t seconds) {
   if (NimBLEDevice::getNumBonds() >= CONFIG_BT_NIMBLE_MAX_BONDS) {
     out["error"] = String("All ") + CONFIG_BT_NIMBLE_MAX_BONDS + " bonds are saved; pairing was not opened and no bond was deleted. Call forget_host to free a slot.";
     return false;
@@ -293,10 +312,12 @@ bool beginPairing(JsonDocument &out) {
   portENTER_CRITICAL(&hidMux); memcpy(pairingExcluded, excluded, sizeof(excluded)); portEXIT_CRITICAL(&hidMux);
   setHid(BLE_HS_CONN_HANDLE_NONE);
   portENTER_CRITICAL(&hidMux); pairingHandle = BLE_HS_CONN_HANDLE_NONE; portEXIT_CRITICAL(&hidMux);
-  pairingUntil = millis()+180000;
+  if (seconds < 30) seconds = 30;
+  if (seconds > 900) seconds = 900;
+  pairingUntil = millis() + seconds * 1000;
   for (auto peer : NimBLEDevice::getServer()->getPeerDevices()) NimBLEDevice::getServer()->disconnect(peer);
   advertisingNeeded = true;
-  out["pairing_open"] = true; out["name"] = keyboardName; out["expires_seconds"] = 180;
+  out["pairing_open"] = true; out["name"] = keyboardName; out["expires_seconds"] = seconds;
   return true;
 }
 bool chooseHost(const String &id, JsonDocument &out) {
@@ -502,7 +523,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       portEXIT_CRITICAL(&hidMux);
       return;
     }
-    if (!permittedHost(info) && !setupOpen()) NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+    if (!permittedHost(info) && !setupOpen()) {
+      // Refused because no window is open, not because anything is broken.
+      if (!info.isBonded()) { ++refusedPairings; lastRefusedPairing = millis(); }
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+    }
     else acceptSubscribedHost(info);
   }
 } serverCallbacks;
@@ -585,7 +610,7 @@ void addTool(JsonArray tools, const char *name, const String &description, const
 void appendHelp(JsonDocument &doc);
 void appendStatus(JsonDocument &doc);
 void appendHosts(JsonDocument &doc);
-bool beginPairing(JsonDocument &out);
+bool beginPairing(JsonDocument &out, uint32_t seconds = 180);
 bool chooseHost(const String &id, JsonDocument &out);
 
 void handleMCP() {
@@ -617,7 +642,7 @@ void handleMCP() {
     addTool(tools, "help", prefix + "Explain what this device is, how to pair and select a target, and what its results do and do not prove. Call this first.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "device_status", prefix + "Read this keyboard's name, Wi-Fi, pairing and selected-host status.", R"({"type":"object","properties":{},"additionalProperties":false})");
     addTool(tools, "list_hosts", prefix + "List Bluetooth bonds persisted on this ESP32, with stable host IDs.", R"({"type":"object","properties":{},"additionalProperties":false})");
-    addTool(tools, "start_pairing", prefix + "Disconnect input and advertise for a new host for 180 seconds. Existing bonds stay saved. Pair the returned Bluetooth name in the target's own Bluetooth settings; there is no code to enter.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
+    addTool(tools, "start_pairing", prefix + "Disconnect input and advertise for a new host. Existing bonds stay saved. Pair the returned Bluetooth name in the target's own Bluetooth settings; there is no code to enter. Give seconds enough room for whoever is doing the tapping to get to the device: outside the window the host is refused and reports that pairing took too long. 30 to 900, default 180.", R"({"type":"object","properties":{"name":{"type":"string","maxLength":64},"seconds":{"type":"integer","minimum":30,"maximum":900,"default":180},"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "cancel_pairing", prefix + "Close the pairing window now and go back to advertising for the selected host.", R"({"type":"object","properties":{"request_id":{"type":"string","maxLength":64}},"additionalProperties":false})");
     addTool(tools, "select_host", prefix + "Reserve input for one saved host and advertise to it. A different host can never receive input while reconnection is pending.", R"({"type":"object","properties":{"host_id":{"type":"string"},"name":{"type":"string","maxLength":64},"request_id":{"type":"string","maxLength":64}},"required":["host_id"],"additionalProperties":false})");
     addTool(tools, "forget_host", prefix + "Delete one saved bond to free a slot. Pass confirm with this board's id. The target keeps its own bond until a person removes it there.", R"({"type":"object","properties":{"host_id":{"type":"string"},"confirm":{"type":"string"},"request_id":{"type":"string","maxLength":64}},"required":["host_id","confirm"],"additionalProperties":false})");
@@ -643,7 +668,7 @@ void handleMCP() {
     else if (name == "start_pairing") {
       pendingHostName = args["name"] | "";
       if (pendingHostName.length() > 64) { out["error"] = "Host name is limited to 64 bytes"; failed = true; }
-      else failed = !beginPairing(out);
+      else failed = !beginPairing(out, args["seconds"] | 180);
     }
     else if (name == "cancel_pairing") cancelPairing(out);
     else if (name == "select_host") {
