@@ -604,3 +604,70 @@ its access token, which today is only obtainable over USB. On a phone that has
 never been given that token the picker reports it and does nothing else. The
 BLE provisioning characteristic would be the natural channel for a phone-only
 setup, and it was deliberately left alone here.
+
+### A keystroke, end to end, 2 November 2026
+
+The chain runs. An MCP tool call reaches the board over Wi-Fi, the board sends
+a HID report over Bluetooth, and the characters appear on the host.
+
+The target was chosen on purpose rather than taken as found: an empty document
+opened in TextEdit, confirmed frontmost before anything was sent, because a
+keystroke goes wherever focus is and the only bonded host was the owner's own
+machine.
+
+| Check | Sent | Read back |
+| --- | --- | --- |
+| Three keys | `press_key` usages 8, 26, 19 | `ewp` in the document, read with AppleScript, not from a screenshot. |
+| A modifier | `press_key` usage 26, modifiers 2 | `ewpW`. Shift reached the host. |
+| The pointer | `move_pointer` dx 80, dy 60 | Cursor moved from 1702,1083 to 1829,1295. Right direction; the larger distance is macOS pointer acceleration. |
+
+Usages 8, 26 and 19 were picked to avoid y and z, which swap on the Czech
+QWERTZ layout the board is currently set to. The board's country code tells
+the host what the physical layout is; it does not decide what a usage types,
+and that remains the host's own layout setting.
+
+Every call returned `notified: true` with `host_action_verified: false`, which
+is the firmware being honest: it knows it sent the report and does not claim
+the host acted on it. The reading back above is what closes that gap.
+
+#### Two bugs this found, in order
+
+The first keeps a host from ever subscribing. `setHidInfo(0, 1)` gave a HID
+country code of 0, "not supported", and macOS answered with its Keyboard Setup
+Assistant: "cannot be identified and will not be usable until it is
+identified". It then bonded, encrypted, read the service and subscribed to
+nothing. `subscribe_events: 0`, `accept_rejections: 4`.
+
+The second keeps it from coming back. Once a host has subscribed, it does not
+write its CCCDs again: NimBLE restores them from its store on reconnection
+**without** an `onSubscribe` callback. A board that learns about subscriptions
+only from that callback never finds out, so every reconnection after the first
+leaves the host connected, encrypted and unusable. Measured here rather than
+reasoned about: `persisted_subscriptions: 5` with `subscribe_events: 0`,
+`authentication_state: 1`, `hid_connected: false` for as long as it was left.
+A bonded, encrypted peer is now accepted without waiting for that callback.
+
+This is the more dangerous of the two for a wall. The first bites once, at
+setup, where someone is watching. The second bites every morning, and looks
+exactly like a board that has died.
+
+#### Flashing leaves this board dead
+
+`pio run -t upload` reports success and a hard reset, and the board does not
+come up: no ping, no MCP, no BLE. Opening the serial port again reboots it
+properly, which is how it was recovered every time. esptool's closing reset
+leaves it in the ROM bootloader, and `rst:0x1 (POWERON_RESET)` with no crash
+backtrace is what that looks like from the console.
+
+This cost two test runs and sent the work chasing firmware faults that were
+not there. One of them was a pairing attempt from the owner's phone, which
+reported a dialog appearing and vanishing: the board was not on the network at
+all at the time, so that attempt proved nothing. Any flash should be followed
+by opening the port once, and any board that goes quiet right after a flash
+should be suspected of this before its firmware is.
+
+Still not verified: nothing has been typed into a phone or tablet, which is
+the product's purpose. iOS has never completed a bond with this board, so the
+whole iOS path — pairing, provisioning from the app, and typing into it —
+remains untested. `host_action_verified` is always false and no tool confirms
+what the target did; the reading back above was done by hand.
