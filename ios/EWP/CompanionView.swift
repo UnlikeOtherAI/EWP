@@ -105,7 +105,10 @@ struct Layout {
 
     init(size: CGSize) {
         // Two readable measures side by side, plus the gutter between them.
-        twoColumn = size.width >= 620
+        // 700 rather than 620: an iPhone Duo is 669 pt across its larger
+        // screen, and splitting that leaves two columns narrower than a
+        // phone's, which reads worse than one column and a scroll.
+        twoColumn = size.width >= 700
         padding = twoColumn ? 26 : 22
         // Splitting a 678 pt screen leaves columns narrower than a phone's,
         // so the headline comes down with them rather than overflowing.
@@ -116,7 +119,9 @@ struct Layout {
         // Beside them, though, it grows with the screen, so a tall iPad does
         // not leave the one important block stranded at the top of a void.
         let ceiling = twoColumn ? max(400, size.height * 0.45) : 348
-        let room = size.height - (twoColumn ? 120 : 300)
+        // Above the blocks, leave room for the header and both of them, so a
+        // 678 pt screen does not give half of itself to one block.
+        let room = size.height - (twoColumn ? 120 : 360)
         fieldHeight = min(ceiling, max(236, room))
     }
 }

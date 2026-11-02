@@ -95,9 +95,25 @@ height than the field alone would like.
 
 | Rule | Why |
 | --- | --- |
-| Two columns at 620 pt and wider | Below that there is not room for two readable measures side by side. |
-| Headline drops to 78% when a column is under 330 pt | Splitting a 678 pt screen leaves columns narrower than a phone's; the headline is the one thing that cannot wrap its way out. |
-| Field height is 45% of the viewport beside the blocks, 348 pt above them, never under 236 pt | It grows with a tall iPad instead of stranding one block at the top of a void, and never swallows a short screen. |
+| Two columns at 700 pt and wider | An iPhone Duo is 669 pt across its larger screen; splitting that leaves columns narrower than a phone's, which reads worse than one column and a scroll. |
+| Headline drops to 78% when a column is under 330 pt | A third-width iPad split is 320 pt, and the headline is the one thing that cannot wrap its way out of it. |
+| Field height is 45% of the viewport beside the blocks; above them it leaves 360 pt for the header and the other two, and is never under 236 pt | It grows with a tall iPad instead of stranding one block at the top of a void, and does not take half of a 678 pt screen. |
+
+Because the rules are arithmetic on a size, they were checked by running the
+shipped `Layout` type over every size that matters, rather than by reaching
+each one on a device:
+
+| Size | Columns | Field | Headline |
+| --- | --- | --- | --- |
+| iPhone 16 Pro Max portrait, 440 × 956 | one | 348 pt | 100% |
+| iPhone 16 Pro Max landscape, 956 × 440 | two | 320 pt | 100% |
+| iPhone Duo larger screen, 669 × 951 | one | 348 pt | 100% |
+| iPhone Duo smaller screen, 466 × 678 | one | 318 pt | 100% |
+| iPhone 13 mini, 375 × 812 | one | 348 pt | 100% |
+| iPad Air 13 portrait, 1032 × 1376 | two | 619 pt | 100% |
+| iPad Air 13 landscape, 1376 × 1032 | two | 464 pt | 100% |
+| iPad half split, 507 × 1376 | one | 348 pt | 100% |
+| iPad third split, 320 × 1376 | one | 348 pt | 78% |
 
 | Check | Host / source | Result |
 | --- | --- | --- |
@@ -106,12 +122,13 @@ height than the field alone would like.
 | iPad, full screen | iPad Air 13 M3 simulator | Two columns; the field now carries the height rather than leaving it empty. |
 | Install on the owner's devices | Physical iPhone 16 Pro Max and iPad Air 13 M3, over USB | Installed and launched on the phone. |
 
-**iPhone Duo is not verified.** Its simulator is booted and has the build
-installed, but its screen will not render for a screenshot without the device
-panel, and access to that device has not been granted, so the layout has only
-been reasoned about from its dimensions — 1398 × 2034 px, 678 × 466 pt, wider
-and far shorter than any other iPhone. By the rules above that puts it in two
-columns with a reduced headline and a 346 pt field. Nothing has confirmed it.
+**iPhone Duo has not been seen rendered.** It is a folding phone: its
+simulator reports two internal displays, 2007 × 2853 px (669 × 951 pt) and
+1398 × 2034 px (466 × 678 pt), and the one it presents changes across a cold
+boot. The build is installed and launches there, and the layout arithmetic for
+both of its screens is in the table above, but the simulator returns a black
+framebuffer without the device panel attached, and access to that device was
+requested four times without an answer. No pixels have been seen.
 
 Not verified: the waiting state was not captured, Dynamic Type above the
 default was not exercised beyond the headline's `ScaledMetric`, and no
