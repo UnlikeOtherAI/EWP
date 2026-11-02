@@ -725,3 +725,44 @@ front, and that is now a requirement of the design rather than an accident.
 Still not verified: the phone has never completed a bond. It finds the board
 (`EWP Bench 1`, `7FFF2716-C51B-265A-75EA-3851606FD310`) and connects, and
 nothing has yet been typed into any phone or tablet.
+
+### Special keys and modifiers, 2 November 2026
+
+Everything asked for is already within `press_key`'s existing schema. Sent to
+the bonded Mac, read back from a TextEdit document with AppleScript:
+
+| Key | Sent | Document after |
+| --- | --- | --- |
+| `a` | usage 4 | `a` |
+| Tab | usage 43 | `a\t` |
+| `b` | usage 5 | `a\tb` |
+| Option+s | usage 22, modifiers 4 | `a\tbß` |
+| Escape | usage 41 | unchanged, which is correct here |
+| Right arrow | usage 79 | unchanged, cursor moved |
+| `c` | usage 6 | `a\tbßc` |
+
+The `ß` is the proof that a modifier other than Shift reaches the host, and
+Ctrl travels the same bitmask: 1 left Ctrl, 2 left Shift, 4 left Alt, 8 left
+GUI, and 16/32/64/128 for the right-hand set. The `c` arriving at the end
+confirms the arrow moved the caret rather than doing nothing. Arrows are 79 to
+82, Home/End/Page Up/Page Down 74 to 78.
+
+What is genuinely out of reach: a bare modifier press, because `usage` is
+required and bounded at 4 to 101, so Ctrl or Cmd on its own cannot be
+expressed; and anything above 101, which is F13 upward and the media and
+volume keys. F1 to F12 are 58 to 69 and fit.
+
+#### A host that parks itself and never recovers
+
+A peer can connect with a private address that resolves to its identity only
+after `onAuthenticationComplete` and `onSubscribe` have both run. Both are
+one-shot, so `permittedHost()` is false while they fire, `parkedPeer()` returns
+in silence, and the selected host stays parked for good: encrypted, subscribed,
+and refused. Measured: `subscribe_events: 2`, `accept_rejections: 0` because
+the silent return is not a rejection, `authentication_state: 1`,
+`hid_connected: false` for as long as it was left.
+
+`loop()` now re-offers every encrypted peer while nothing holds input. The
+board recovers by itself instead of waiting for a reconnection that nobody is
+there to trigger, which on a wall is the difference between a device that comes
+back and one that looks dead.

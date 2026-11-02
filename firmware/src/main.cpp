@@ -825,6 +825,25 @@ void loop() {
       strlcpy(sample[i], hostId(NimBLEDevice::getBondedAddress(i)).c_str(), 32);
     portENTER_CRITICAL(&hidMux); memcpy(bondedIds, sample, sizeof(sample)); portEXIT_CRITICAL(&hidMux);
   }
+  // A peer can connect with a private address that only resolves to its
+  // identity after onAuthenticationComplete and onSubscribe have both run. Both
+  // are one-shot, so permittedHost() is false while they fire, parkedPeer()
+  // returns in silence, and the host stays parked for good even though it is
+  // the selected one, encrypted and subscribed. Seen on a Mac that had
+  // subscribe_events 2, accept_rejections 0 and hid_connected false for as long
+  // as it was left. Re-offer every connected peer while nothing holds input, so
+  // the board recovers by itself rather than needing a reconnection nobody is
+  // there to trigger.
+  static uint32_t reoffered = 0;
+  if (getHid() == BLE_HS_CONN_HANDLE_NONE && !selectedId().isEmpty()
+      && static_cast<int32_t>(millis() - reoffered) > 2000) {
+    reoffered = millis();
+    auto server = NimBLEDevice::getServer();
+    for (auto handle : server->getPeerDevices()) {
+      NimBLEConnInfo info = server->getPeerInfoByHandle(handle);
+      if (info.isEncrypted()) acceptSubscribedHost(info);
+    }
+  }
   static bool wasPairing = false;
   bool open = pairingOpen();
   if (wasPairing != open) { advertisingNeeded = true; wasPairing = open; }
