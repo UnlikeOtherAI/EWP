@@ -22,27 +22,17 @@ struct CompanionView: View {
                 ScrollView {
                     VStack(spacing: Theme.cardSpacing) {
                         header
-                        if layout.twoColumn {
-                            // With room for two readable measures the field
-                            // goes beside the quiet blocks rather than above
-                            // them. Equal explicit widths: left to negotiate,
-                            // the columns size to their text and long messages
-                            // get truncated.
-                            HStack(alignment: .top, spacing: Theme.cardSpacing) {
-                                ShareField(model: model, layout: layout)
-                                    .frame(maxWidth: .infinity)
-                                VStack(spacing: Theme.cardSpacing) {
-                                    AgentBlock(model: model)
-                                    KeyboardBlock(model: model, showSetup: $showSetup)
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                        } else {
-                            ShareField(model: model, layout: layout)
-                            AgentBlock(model: model)
-                            KeyboardBlock(model: model, showSetup: $showSetup)
-                        }
+                        // Short content sits in the middle of the space left
+                        // under the wordmark rather than against the top with
+                        // the rest of the screen blank: on an iPad that blank
+                        // was half the display. The cards keep their own
+                        // height, so the slack goes to the spacers and not
+                        // into stretching the field past the size it asked for.
+                        Spacer(minLength: 0)
+                        cards(layout).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
                     }
+                    .frame(minHeight: geometry.size.height - 48, alignment: .top)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 32)
                     .readableColumn(wide: layout.twoColumn)
@@ -70,6 +60,37 @@ struct CompanionView: View {
         }
     }
 
+    @ViewBuilder
+    private func cards(_ layout: Layout) -> some View {
+        VStack(spacing: Theme.cardSpacing) {
+            switch layout.shape {
+            case .beside:
+                // Equal explicit widths: left to negotiate, the columns size
+                // to their text and long messages get truncated.
+                HStack(alignment: .top, spacing: Theme.cardSpacing) {
+                    ShareField(model: model, layout: layout)
+                        .frame(maxWidth: .infinity)
+                    VStack(spacing: Theme.cardSpacing) {
+                        AgentBlock(model: model)
+                        KeyboardBlock(model: model, showSetup: $showSetup)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            case .below:
+                ShareField(model: model, layout: layout)
+                HStack(alignment: .top, spacing: Theme.cardSpacing) {
+                    AgentBlock(model: model).frame(maxWidth: .infinity)
+                    KeyboardBlock(model: model, showSetup: $showSetup)
+                        .frame(maxWidth: .infinity)
+                }
+            case .stacked:
+                ShareField(model: model, layout: layout)
+                AgentBlock(model: model)
+                KeyboardBlock(model: model, showSetup: $showSetup)
+            }
+        }
+    }
+
     /// The app's own header, rather than a system large title: the wordmark is
     /// heavier and tighter than any system style, and it is half the identity.
     private var header: some View {
@@ -79,7 +100,8 @@ struct CompanionView: View {
             NavigationLink { AdvancedView(model: model) } label: {
                 HStack(spacing: 6) {
                     Text("Advanced")
-                    Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .medium))
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .medium))
                 }
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.subtle)
@@ -92,36 +114,68 @@ struct CompanionView: View {
 }
 
 /// The home screen is laid out from the space it is actually given, not from
-/// the size class. An iPad in a narrow split is a phone; an iPhone Duo is a
-/// short wide screen that no size class describes; and a phone in landscape
-/// has less height than the field alone would like.
+/// the size class. An iPad in a narrow split is a phone; an iPhone Duo folded
+/// shut is a phone and opened out is a short wide screen, and no size class
+/// tells them apart; and a phone in landscape has less height than the field
+/// alone would like.
 struct Layout {
-    let twoColumn: Bool
+    /// Where the two quiet blocks go relative to the field.
+    enum Shape {
+        /// One column, the blocks under the field. Any phone.
+        case stacked
+        /// The blocks beside the field. A screen wide enough for two
+        /// readable measures and too short to put anything under them.
+        case beside
+        /// The blocks side by side in a row under a full-width field. A wide
+        /// screen that is also tall: beside the field there, the field would
+        /// have to be a tower to fill the height, and anything shorter leaves
+        /// the bottom half of the screen empty.
+        case below
+    }
+
+    let shape: Shape
     let fieldHeight: CGFloat
     let padding: CGFloat
     /// Applied to the headline, which is the one thing that cannot simply
     /// wrap its way out of a narrow column.
     let titleScale: CGFloat
 
+    var twoColumn: Bool { shape != .stacked }
+
     init(size: CGSize) {
         // Two readable measures side by side, plus the gutter between them.
         // 700 rather than 620: an iPhone Duo is 669 pt across its larger
         // screen, and splitting that leaves two columns narrower than a
         // phone's, which reads worse than one column and a scroll.
-        twoColumn = size.width >= 700
-        padding = twoColumn ? 26 : 22
+        let wide = size.width >= 700
+        // A screen taller than it is wide has room under the field for the
+        // blocks, and needs it: an iPad Air in portrait is 1032 x 1376, and
+        // beside the field that left half the display blank.
+        shape = wide ? (size.height > size.width ? .below : .beside) : .stacked
+        padding = wide ? 26 : 22
         // Splitting a 678 pt screen leaves columns narrower than a phone's,
         // so the headline comes down with them rather than overflowing.
-        let column = twoColumn ? (size.width - 46) / 2 : size.width - 32
+        let column = shape == .beside ? (size.width - 46) / 2 : size.width - 32
         titleScale = column < 330 ? 0.78 : 1
-        // The field never takes the whole viewport: on a short screen the
-        // blocks under it have to stay in sight without scrolling for them.
-        // Beside them, though, it grows with the screen, so a tall iPad does
-        // not leave the one important block stranded at the top of a void.
-        let ceiling = twoColumn ? max(400, size.height * 0.45) : 348
-        // Above the blocks, leave room for the header and both of them, so a
-        // 678 pt screen does not give half of itself to one block.
-        let room = size.height - (twoColumn ? 120 : 360)
+
+        // The field is bounded by its own width as well as by the space left
+        // over, because the shared screen appears in it and a card far taller
+        // than it is wide is a void with a button at the bottom.
+        let ceiling: CGFloat
+        let room: CGFloat
+        switch shape {
+        case .stacked:
+            ceiling = 348
+            // The blocks under it have to stay in sight without scrolling.
+            room = size.height - 360
+        case .beside:
+            ceiling = column * 1.25
+            room = size.height - 90
+        case .below:
+            ceiling = column * 0.8
+            // Header, the row of blocks under the field, and the gaps.
+            room = size.height - 330
+        }
         fieldHeight = min(ceiling, max(236, room))
     }
 }

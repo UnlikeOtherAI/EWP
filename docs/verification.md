@@ -90,49 +90,80 @@ is no layout before and after to show for them.
 The home screen no longer branches on the horizontal size class. It measures
 the space it is actually given and decides from that, because the size class
 describes none of the cases that matter here: an iPad in a narrow split is a
-phone, an iPhone Duo is a short wide screen, and a phone in landscape has less
-height than the field alone would like.
+phone, an iPhone Duo folded shut is a phone and opened out is a short wide
+screen, and a phone in landscape has less height than the field alone would
+like.
+
+The screen takes one of three shapes:
+
+| Shape | When | What it looks like |
+| --- | --- | --- |
+| `stacked` | Under 700 pt wide | One column: the field, then the agent block, then the keyboard block. Any phone, and an iPad in a half or third split. |
+| `beside` | 700 pt and wider, and wider than it is tall | The two quiet blocks in a column to the right of the field. An unfolded iPhone Duo, an iPad in landscape, a phone in landscape. |
+| `below` | 700 pt and wider, and taller than it is wide | The field full width, the two quiet blocks in a row underneath. An iPad in portrait. |
 
 | Rule | Why |
 | --- | --- |
-| Two columns at 700 pt and wider | An iPhone Duo is 669 pt across its larger screen; splitting that leaves columns narrower than a phone's, which reads worse than one column and a scroll. |
+| Two columns at 700 pt and wider | An iPhone Duo is 669 pt across its cover screen; splitting that leaves columns narrower than a phone's, which reads worse than one column and a scroll. |
 | Headline drops to 78% when a column is under 330 pt | A third-width iPad split is 320 pt, and the headline is the one thing that cannot wrap its way out of it. |
-| Field height is 45% of the viewport beside the blocks; above them it leaves 360 pt for the header and the other two, and is never under 236 pt | It grows with a tall iPad instead of stranding one block at the top of a void, and does not take half of a 678 pt screen. |
+| The field is bounded by its own width, not only by the height left over | The shared screen appears in the field, and a card far taller than it is wide is a void with a button at the bottom. Tying it to the height alone turned a portrait iPad into exactly that. |
+| Short content is centred in the space under the wordmark | Anchored to the top it left the bottom half of an iPad blank. The cards keep their own height, so the slack goes to the spacers rather than stretching the field past the size it asked for. |
 
-Because the rules are arithmetic on a size, they were checked by running the
-shipped `Layout` type over every size that matters, rather than by reaching
-each one on a device:
+The field's ceiling per shape: `stacked` 348 pt, with 360 pt left below it for
+the header and the other two blocks; `beside` 1.25 × its column; `below`
+0.8 × the full width, with 330 pt left for the row underneath. Never under
+236 pt.
 
-| Size | Columns | Field | Headline |
+| Size | Shape | Field | Headline |
 | --- | --- | --- | --- |
-| iPhone 16 Pro Max portrait, 440 × 956 | one | 348 pt | 100% |
-| iPhone 16 Pro Max landscape, 956 × 440 | two | 320 pt | 100% |
-| iPhone Duo larger screen, 669 × 951 | one | 348 pt | 100% |
-| iPhone Duo smaller screen, 466 × 678 | one | 318 pt | 100% |
-| iPhone 13 mini, 375 × 812 | one | 348 pt | 100% |
-| iPad Air 13 portrait, 1032 × 1376 | two | 619 pt | 100% |
-| iPad Air 13 landscape, 1376 × 1032 | two | 464 pt | 100% |
-| iPad half split, 507 × 1376 | one | 348 pt | 100% |
-| iPad third split, 320 × 1376 | one | 348 pt | 78% |
+| iPhone 16 Pro Max portrait, 440 × 956 | stacked | 348 pt | 100% |
+| iPhone 16 Pro Max landscape, 956 × 440 | beside | 350 pt | 100% |
+| iPhone Duo opened out, 951 × 669 | beside | 565 pt | 100% |
+| iPhone Duo folded shut, 466 × 678 | stacked | 318 pt | 100% |
+| iPhone 13 mini, 375 × 812 | stacked | 348 pt | 100% |
+| iPad Air 13 portrait, 1032 × 1376 | below | 800 pt | 100% |
+| iPad Air 13 landscape, 1376 × 1032 | beside | 831 pt | 100% |
+| iPad half split, 507 × 1376 | stacked | 348 pt | 100% |
+| iPad third split, 320 × 1376 | stacked | 348 pt | 78% |
+
+#### Before and after
+
+| Before | After |
+| --- | --- |
+| iPad Air 13 portrait: two columns, the bottom half of the display blank.<br>![iPad portrait before](screenshots/ipad-portrait-before.jpg) | iPad Air 13 portrait: field full width, the two blocks in a row under it.<br>![iPad portrait after](screenshots/ipad-portrait-after.jpg) |
+| iPhone Duo opened out: field held to 45% of the height, a third of the screen empty below the cards.<br>![Duo opened out before](screenshots/duo-open-before.jpg) | iPhone Duo opened out: field bounded by its column, cards centred.<br>![Duo opened out after](screenshots/duo-open-after.jpg) |
+| iPhone Duo folded shut: no prior equivalent — the cover screen had never been seen rendered. | iPhone Duo folded shut: one column, scrolls to the keyboard block.<br>![Duo folded shut](screenshots/duo-closed.jpg) |
+
+#### What the Duo turned out to be
+
+It is a folding phone, and Xcode 27 has no Simulator app — simulators live in
+Device Hub, whose device window carries **Closed / Partially Open / Open**
+buttons. Closed it presents a 1398 × 2034 px cover screen (466 × 678 pt);
+partially open and open it presents a 2853 × 2007 px inner screen
+(951 × 669 pt), landscape, not the portrait 669 × 951 that the enumerated
+default sizes suggest. Partially open and open give the same geometry. The
+screen it is not presenting returns a black framebuffer, which is why earlier
+screenshots were black: the device was folded shut the whole time, and the
+larger display was simply off.
 
 | Check | Host / source | Result |
 | --- | --- | --- |
 | iPhone, portrait | iPhone 16 Pro Max simulator | Single column, unchanged. |
-| iPhone, landscape | iPhone 16 Pro Max simulator, 956 × 440 | Two columns, field reduced to fit the height. |
-| iPad, full screen | iPad Air 13 M3 simulator | Two columns; the field now carries the height rather than leaving it empty. |
-| Install on the owner's devices | Physical iPhone 16 Pro Max and iPad Air 13 M3, over USB | Installed and launched on the phone. |
+| iPhone Duo, folded shut | iPhone Duo simulator, 466 × 678 pt | Single column, scrolls to the keyboard block. |
+| iPhone Duo, opened out | iPhone Duo simulator, 951 × 669 pt | Blocks beside the field, cards centred with roughly even margins top and bottom. |
+| iPhone Duo, partially open | iPhone Duo simulator | Same geometry as opened out; no separate case. |
+| iPad, portrait | iPad Air 13 M3 simulator, 1032 × 1376 pt | Field full width, agent and keyboard blocks in a row underneath. |
+| Install on the owner's devices | Physical iPhone 16 Pro Max and iPad Air 13 M3, over USB | Installed on both. |
 
-**iPhone Duo has not been seen rendered.** It is a folding phone: its
-simulator reports two internal displays, 2007 × 2853 px (669 × 951 pt) and
-1398 × 2034 px (466 × 678 pt), and the one it presents changes across a cold
-boot. The build is installed and launches there, and the layout arithmetic for
-both of its screens is in the table above, but the simulator returns a black
-framebuffer without the device panel attached, and access to that device was
-requested four times without an answer. No pixels have been seen.
-
-Not verified: the waiting state was not captured, Dynamic Type above the
-default was not exercised beyond the headline's `ScaledMetric`, and no
-physical device has run this build.
+Not verified: iPad landscape was not reached — the simulator did not take a
+headless rotation, so that shape is covered only by the unfolded Duo, which
+runs the same `beside` path at a smaller size. The waiting state was not
+captured, Dynamic Type above the default was not exercised beyond the
+headline's `ScaledMetric`, and no physical device has been seen running this
+build. On the simulators the agent block reports `Address already in use`:
+they share the Mac's network stack and the MCP server binds a fixed 7801, so
+only the first simulator to start gets it. Each real device has its own stack,
+and the iPad above shows the block reachable.
 
 ## Changed screens
 
