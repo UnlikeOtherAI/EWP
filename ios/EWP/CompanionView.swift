@@ -23,12 +23,17 @@ struct CompanionView: View {
                     // Width enough for the log to live beside the rest, so it
                     // is always visible rather than somewhere to navigate to.
                     HStack(alignment: .top, spacing: Theme.cardSpacing) {
-                        ScrollView { home(layout, height: geometry.size.height) }
+                        ScrollView { home(layout, height: geometry.size.height, centred: false) }
                             .frame(maxWidth: .infinity)
                         ScrollView {
                             VStack(spacing: Theme.cardSpacing) {
                                 logHeader
-                                KeyLogView(log: model.received)
+                                // The console fills its column rather than
+                                // sitting in it as a short card. A terminal
+                                // that stops a third of the way down the
+                                // screen reads as a widget, not a log.
+                                KeyLogView(log: model.received,
+                                           minHeight: geometry.size.height - 96)
                             }
                             .padding(.trailing, 16)
                             .padding(.bottom, 32)
@@ -39,12 +44,13 @@ struct CompanionView: View {
                     // Too narrow to show both, so they are two pages with the
                     // dots under them, swiped between like photographs.
                     TabView {
-                        ScrollView { home(layout, height: geometry.size.height - 28) }
+                        ScrollView { home(layout, height: geometry.size.height - 28, centred: true) }
                             .signalBackground()
                         ScrollView {
                             VStack(spacing: Theme.cardSpacing) {
                                 logHeader
-                                KeyLogView(log: model.received)
+                                KeyLogView(log: model.received,
+                                           minHeight: geometry.size.height - 150)
                             }
                             .padding(.horizontal, 16)
                             .padding(.bottom, 40)
@@ -82,20 +88,20 @@ struct CompanionView: View {
     }
 
     /// The home page: everything that was here before the log arrived.
+    /// `centred` is for the single-column case, where short content in the
+    /// middle of the screen reads better than short content clinging to the
+    /// top of an empty one. Beside the log it is wrong: the two columns should
+    /// start level, and the cards should take only the height they need so the
+    /// log has the rest.
     @ViewBuilder
-    private func home(_ layout: Layout, height: CGFloat) -> some View {
+    private func home(_ layout: Layout, height: CGFloat, centred: Bool) -> some View {
         VStack(spacing: Theme.cardSpacing) {
             header
-            // Short content sits in the middle of the space left under the
-            // wordmark rather than against the top with the rest of the screen
-            // blank: on an iPad that blank was half the display. The cards keep
-            // their own height, so the slack goes to the spacers and not into
-            // stretching the field past the size it asked for.
-            Spacer(minLength: 0)
+            if centred { Spacer(minLength: 0) }
             cards(layout).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+            if centred { Spacer(minLength: 0) }
         }
-        .frame(minHeight: height - 48, alignment: .top)
+        .frame(minHeight: centred ? height - 48 : 0, alignment: .top)
         .padding(.horizontal, 16)
         .padding(.bottom, 32)
         .readableColumn(wide: layout.twoColumn)
@@ -222,12 +228,10 @@ struct Layout {
         // takes enough width to read a line of typing as a line and the rest
         // is left to lay out exactly as a phone does. In landscape there is
         // room for three columns, so the log takes what it needs and no more.
-        // Landscape keeps the log narrow on purpose: the point of the extra
-        // width there is a third column, the field and the quiet blocks side
-        // by side with the log, and a log any wider pushes the home half back
-        // into two rows.
-        logWidth = logBesideIt ? (portrait ? size.width * 0.42
-                                           : min(360, max(280, size.width * 0.22))) : 0
+        // The log gets a little over half. It is the thing being read, and
+        // the rest is a handful of cards that do not need the room: giving the
+        // log the larger share is what makes it usable rather than a sidebar.
+        logWidth = logBesideIt ? max(320, size.width * 0.52) : 0
         let forHome = size.width - (logBesideIt ? logWidth + Theme.cardSpacing : 0)
         let wideHome = forHome >= 700 && !(logBesideIt && portrait)
         shape = wideHome ? (size.height > forHome ? .below : .beside) : .stacked

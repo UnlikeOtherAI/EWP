@@ -44,6 +44,25 @@ extension Color {
     }
 }
 
+/// The console. Everywhere else in EWP follows the light or dark appearance;
+/// this one surface does not, because a terminal is a terminal. Charcoal
+/// rather than black, so the card still reads as a card and the rounded corner
+/// is visible against the page, and a phosphor green chosen to be legible for
+/// a long time rather than to look like a prop: nothing near 00ff00.
+enum Console {
+    static let surface = Color(rgb: 0x14160F)
+    static let line = Color(rgb: 0x262A1E)
+    static let text = Color(rgb: 0x9CCB72)
+    static let dim = Color(rgb: 0x5E7548)
+    /// Keys with no character of their own. Amber against the green so a
+    /// special key is distinct without competing with the text.
+    static let special = Color(rgb: 0xD8A657)
+}
+
+extension Color {
+    init(rgb: UInt32) { self.init(uiColor: UIColor(rgb: rgb)) }
+}
+
 private extension UIColor {
     convenience init(rgb: UInt32) {
         self.init(red: CGFloat((rgb >> 16) & 0xFF) / 255,

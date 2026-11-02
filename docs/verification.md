@@ -1070,8 +1070,10 @@ is always there; where there is not, it is a second page a thumb away.
 | iPhone landscape 956 × 440 | beside, 280 pt | 662 pt | `stacked` |
 | iPad half split 507 × 1376 | second page | 507 pt | `stacked` |
 
-Landscape keeps the log narrow deliberately: the width is there to buy a third
-column, and a wider log pushes the home half back into two rows.
+The log takes a little over half the width wherever it has a column, because
+it is the thing being read and the rest is a handful of cards that do not need
+the room. Beside it the home column starts at the top and takes only the
+height it needs, rather than sitting in the middle of its own space.
 
 Presses are gathered into runs rather than listed one per line, because a line
 of typing is one event to a person and timestamping every letter buries what
@@ -1083,3 +1085,26 @@ text, so a special key is visible rather than invisible.
 
 The phone's paging was blank white at first: a page-style `TabView` inside a
 `GeometryReader` lays out as nothing unless it is given a size.
+
+
+### The console, 2 November 2026
+
+The log is the one surface in EWP that does not follow the light or dark
+appearance. It is green on charcoal, monospaced, at a weight a shade heavier
+than a terminal's usual, because a log of keystrokes is read the way a terminal
+is read and the ordinary card gave no signal that what was inside is machine
+output rather than prose.
+
+| Token | Value | Why |
+| --- | --- | --- |
+| `Console.surface` | `#14160F` | Charcoal, not black, so the card still reads as a card and its corner is visible against the page. |
+| `Console.text` | `#9CCB72` | Phosphor green chosen to be read for a long time, nowhere near `00ff00`. |
+| `Console.dim` | `#5E7548` | Timestamps and the empty state. |
+| `Console.special` | `#D8A657` | Keys with no character of their own: amber against the green, distinct without competing. |
+
+Two layout mistakes on the way, both from putting a modifier in the wrong
+place. The phone's paging was blank white until the `TabView` was given a
+size, because a page style inside a `GeometryReader` lays out as nothing
+without one. And the console stayed the height of its text while empty page
+grew around it, because the minimum height was applied outside the card's
+background instead of inside it.

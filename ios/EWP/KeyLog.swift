@@ -4,12 +4,22 @@ import SwiftUI
 /// machine does. `received_input` serves the same presses over MCP with every
 /// field intact; this is the view for whoever is holding the device.
 ///
+/// It is a console, and looks like one: green on charcoal, monospaced, the one
+/// surface in EWP that does not follow the light or dark appearance. That is
+/// deliberate rather than decorative — a log of keystrokes is read the way a
+/// terminal is read, in long stretches, and the usual card gives no signal
+/// that what is inside is machine output rather than prose.
+///
 /// Presses are gathered into runs rather than listed one per line. A line of
 /// typing is one event to a person, not forty, and timestamping every letter
 /// buries the thing you are looking for. A run ends at a newline, at a key
 /// that is not a character, or after a pause, and carries the time it began.
 struct KeyLogView: View {
     @ObservedObject var log: ReceivedInput
+    /// How tall the console should be at least. Applied inside the card, so
+    /// the charcoal grows with it; outside, it only adds empty page around a
+    /// card that stays the size of its text.
+    var minHeight: CGFloat = 0
 
     /// A run of presses that belong together.
     struct Run: Identifiable {
@@ -59,52 +69,67 @@ struct KeyLogView: View {
         return formatter
     }()
 
+    /// A shade heavier than a terminal's usual weight. Thin monospace on a
+    /// dark ground reads badly at a glance, which is how this is read.
+    private func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
+        .system(size: size, weight: weight, design: .monospaced)
+    }
+
     var body: some View {
-        Card {
-            CardRow(divider: !log.presses.isEmpty) {
-                BlockLabel(title: "Key log") {
-                    Beacon(text: log.presses.isEmpty ? "WAITING" : "\(log.total)",
-                           tint: log.presses.isEmpty ? Theme.subtle : Theme.accent,
-                           breathing: !log.presses.isEmpty)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("key log")
+                    .font(mono(12, .semibold))
+                    .foregroundStyle(Console.dim)
+                Spacer(minLength: 8)
+                Text(log.presses.isEmpty ? "waiting" : "\(log.total)")
+                    .font(mono(12, .semibold))
+                    .foregroundStyle(log.presses.isEmpty ? Console.dim : Console.text)
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+
+            Rectangle().fill(Console.line).frame(height: 1)
+
             if log.presses.isEmpty {
-                CardRow(divider: false) {
-                    Text("Keys appear here as they arrive. iOS gives them only to the app in front, so this stays empty while you use something else.")
-                        .font(.footnote)
-                        .foregroundStyle(Theme.subtle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                Text("Keys appear here as they arrive.\niOS gives them only to the app in front,\nso this stays empty while you use something else.")
+                    .font(mono(12))
+                    .foregroundStyle(Console.dim)
+                    .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
             } else {
                 let runs = Self.runs(from: log.presses).reversed()
-                ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
-                    CardRow(divider: index < runs.count - 1) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(Self.clock.string(from: run.began))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Theme.subtle)
-                                Spacer(minLength: 0)
-                                Text("\(run.count)")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Theme.subtle.opacity(0.7))
-                            }
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(runs), id: \.id) { run in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Self.clock.string(from: run.began))
+                                .font(mono(11, .regular))
+                                .foregroundStyle(Console.dim)
                             if !run.text.isEmpty {
                                 Text(run.text)
-                                    .font(.system(size: 14, design: .monospaced))
-                                    .foregroundStyle(Theme.ink)
+                                    .font(mono(14))
+                                    .foregroundStyle(Console.text)
                                     .textSelection(.enabled)
                             }
                             if !run.specials.isEmpty {
-                                Text(run.specials.joined(separator: "  "))
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(Theme.accent)
+                                Text(run.specials.joined(separator: " "))
+                                    .font(mono(12, .semibold))
+                                    .foregroundStyle(Console.special)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .padding(16)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+        .background(Console.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .strokeBorder(Console.line, lineWidth: 1)
+        )
     }
 }
