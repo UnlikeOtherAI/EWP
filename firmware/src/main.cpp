@@ -67,6 +67,13 @@ uint16_t pairingHandle = BLE_HS_CONN_HANDLE_NONE;
 // authentication callback rather than waiting for iOS to subscribe twice.
 struct Subscription { uint16_t handle = BLE_HS_CONN_HANDLE_NONE; uint8_t reports = 0; };
 Subscription subscriptions[3];
+// Instrumentation for a host that connects, encrypts and then never becomes
+// the HID host. NimBLE 2.3.6 offers no way to ask whether a connection is
+// subscribed, so the only way to tell "the host never subscribed" from "the
+// board lost track of it" is to count the callbacks as they arrive.
+volatile int subscribeEvents = 0;
+volatile int acceptAttempts = 0;
+volatile int acceptRejections = 0;
 volatile int lastDisconnectReason = 0;
 volatile uint32_t connectionsSeen = 0;
 volatile int securityRequestResult = 0;
@@ -238,6 +245,12 @@ void appendStatus(JsonDocument &doc) {
   doc["last_disconnect_reason"] = lastDisconnectReason;
   doc["connections_seen"] = connectionsSeen;
   doc["security_request_result"] = securityRequestResult;
+  doc["subscribe_events"] = subscribeEvents;
+  doc["accept_attempts"] = acceptAttempts;
+  doc["accept_rejections"] = acceptRejections;
+  { uint8_t bits = 0; int live = 0;
+    for (auto &entry : subscriptions) if (entry.handle != BLE_HS_CONN_HANDLE_NONE) { ++live; bits |= entry.reports; }
+    doc["subscription_slots"] = live; doc["subscription_reports"] = bits; }
   doc["authentication_state"] = authenticationState;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["address"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
@@ -356,13 +369,14 @@ bool forgetHost(const String &id, JsonDocument &out) {
 // that starves the phone being paired. Keep it connected with no HID handle.
 bool parkedPeer(NimBLEConnInfo &info) { return !permittedHost(info) && info.isBonded(); }
 void acceptSubscribedHost(NimBLEConnInfo &info) {
+  ++acceptAttempts;
   bool subscribed = false;
   for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle() && entry.reports) subscribed = true;
   // Encrypted, not authenticated, for the same reason as the pairing
   // decision: a Just Works bond is never authenticated, and asking for it
   // here meant a phone could bond and subscribe and still never be taken as
   // the host, which looks from the phone like pairing that does not stick.
-  if (!subscribed || !info.isEncrypted()) return;
+  if (!subscribed || !info.isEncrypted()) { ++acceptRejections; return; }
   if (parkedPeer(info)) return;
   uint16_t current = getHid();
   if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
@@ -449,6 +463,7 @@ class ReportCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *report, NimBLEConnInfo &info, uint16_t value) override {
     for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle()) {
       uint8_t bit = report == keyboard ? 1 : 2;
+      ++subscribeEvents;
       if (value) entry.reports |= bit; else entry.reports &= ~bit;
       if (!entry.reports && getHid() == info.getConnHandle()) setHid(BLE_HS_CONN_HANDLE_NONE);
     }
