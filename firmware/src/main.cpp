@@ -61,7 +61,10 @@ uint32_t setupCode;
 // and makes macOS open its Keyboard Setup Assistant to ask a keyboard that
 // has no keys which key is next to its left Shift.
 uint8_t keyboardCountry = 13;
-NimBLEHIDDevice *hidDevice = nullptr;
+// The HID information characteristic, kept so the layout can be rewritten
+// without rebuilding the service. The service is assembled by hand, so there
+// is no NimBLEHIDDevice to ask for it.
+NimBLECharacteristic *hidInfoCharacteristic = nullptr;
 uint32_t provisionUntil;
 volatile bool storeFull = false;
 uint32_t inputSequence = 0;
@@ -336,8 +339,9 @@ bool persistLayout(JsonVariantConst value, JsonDocument &out) {
   // this service reads the new value. A host that already discovered it
   // cached the old one, and this is what asks it to look again. The cost is
   // that it re-discovers every service, so input stops for a moment.
-  if (hidDevice) {
-    hidDevice->setHidInfo(keyboardCountry, 1);
+  if (hidInfoCharacteristic) {
+    uint8_t info[] = {0x11, 0x01, keyboardCountry, 0x01};
+    hidInfoCharacteristic->setValue(info, sizeof(info));
     ble_svc_gatt_changed(0x0001, 0xffff);
   }
   out["keyboard_layout"] = layoutName(keyboardCountry);
@@ -770,18 +774,54 @@ void setup() {
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   auto server = NimBLEDevice::createServer(); server->setCallbacks(&serverCallbacks);
-  auto hid = new NimBLEHIDDevice(server); hidDevice = hid;
-  keyboard = hid->getInputReport(1); mouse = hid->getInputReport(2);
+  // The HID service is built here rather than with NimBLEHIDDevice, for one
+  // attribute. That class creates the report map with plain READ, and Silicon
+  // Labs' BLE HID documentation states that iOS needs the report map and the
+  // report reference descriptor to require encryption. Measured with the test
+  // rig, the old service handed the map over in the clear: 99 bytes on an
+  // unencrypted link. The class offers no way to change a characteristic's
+  // permissions after creation, so the service is assembled by hand and
+  // everything else matches what it used to build.
+  auto deviceInfo = server->createService(NimBLEUUID((uint16_t)0x180a));
+  deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2a29), NIMBLE_PROPERTY::READ)
+      ->setValue("UnlikeOtherAI");
+  { uint8_t pnp[] = {0x02, 0xe5, 0x02, 0x00, 0x00, 0x00, 0x01};  // USB vendor, as before
+    deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2a50), NIMBLE_PROPERTY::READ)
+        ->setValue(pnp, sizeof(pnp)); }
+
+  auto battery = server->createService(NimBLEUUID((uint16_t)0x180f));
+  battery->createCharacteristic(NimBLEUUID((uint16_t)0x2a19),
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY)->setValue(static_cast<uint8_t>(100));
+
+  auto hidService = server->createService(NimBLEUUID((uint16_t)0x1812));
+  hidInfoCharacteristic = hidService->createCharacteristic(NimBLEUUID((uint16_t)0x2a4a),
+      NIMBLE_PROPERTY::READ);
+  { uint8_t info[] = {0x11, 0x01, keyboardCountry, 0x01};  // HID 1.11, country, remote wake
+    hidInfoCharacteristic->setValue(info, sizeof(info)); }
+  hidService->createCharacteristic(NimBLEUUID((uint16_t)0x2a4b),
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC)->setValue(reportMap, sizeof(reportMap));
+  hidService->createCharacteristic(NimBLEUUID((uint16_t)0x2a4c), NIMBLE_PROPERTY::WRITE_NR);
+  hidService->createCharacteristic(NimBLEUUID((uint16_t)0x2a4e),
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE_NR)->setValue(static_cast<uint8_t>(0x01));
+
+  auto inputReport = [&](uint8_t reportId) {
+    auto chr = hidService->createCharacteristic(NimBLEUUID((uint16_t)0x2a4d),
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
+    auto reference = chr->createDescriptor(NimBLEUUID((uint16_t)0x2908),
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC);
+    uint8_t value[] = {reportId, 0x01};  // this id, input
+    reference->setValue(value, sizeof(value));
+    return chr;
+  };
+  keyboard = inputReport(1); mouse = inputReport(2);
   keyboard->setCallbacks(&reportCallbacks); mouse->setCallbacks(&reportCallbacks);
-  hid->setManufacturer("UnlikeOtherAI"); hid->setHidInfo(keyboardCountry, 1);
-  hid->setReportMap(reportMap, sizeof(reportMap)); hid->setBatteryLevel(100);
   auto service = server->createService(SERVICE);
   auto config = service->createCharacteristic(CONFIG, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC, 512);
   config->setCallbacks(&provisionCallbacks);
   statusCharacteristic = service->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   statusCharacteristic->setValue("{\"state\":\"ready\"}");
   // NimBLE 2.3.x registers each service explicitly before starting GATT.
-  hid->startServices();
+  deviceInfo->start(); battery->start(); hidService->start();
   service->start();
   server->start();
   auto advertising = NimBLEDevice::getAdvertising();
