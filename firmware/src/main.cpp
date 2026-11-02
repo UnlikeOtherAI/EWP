@@ -287,7 +287,11 @@ bool parkedPeer(NimBLEConnInfo &info) { return !permittedHost(info) && info.isBo
 void acceptSubscribedHost(NimBLEConnInfo &info) {
   bool subscribed = false;
   for (auto &entry : subscriptions) if (entry.handle == info.getConnHandle() && entry.reports) subscribed = true;
-  if (!subscribed || !info.isEncrypted() || !info.isAuthenticated()) return;
+  // Encrypted, not authenticated, for the same reason as the pairing
+  // decision: a Just Works bond is never authenticated, and asking for it
+  // here meant a phone could bond and subscribe and still never be taken as
+  // the host, which looks from the phone like pairing that does not stick.
+  if (!subscribed || !info.isEncrypted()) return;
   if (parkedPeer(info)) return;
   uint16_t current = getHid();
   if (!permittedHost(info) || (current != BLE_HS_CONN_HANDLE_NONE && current != info.getConnHandle())) {
@@ -606,9 +610,6 @@ void setup() {
   keyboardName = advertisedName();
   NimBLEDevice::setDeviceCallbacks(&deviceCallbacks);
   NimBLEDevice::init(keyboardName.c_str());
-  // Only a board that has never been paired opens a pairing window by itself.
-  // A power blip must not offer a wall of boards to anyone in the room.
-  if (NimBLEDevice::getNumBonds() == 0) pairingUntil = millis() + 300000;
   bool selectedBonded = selectedId().isEmpty();
   for (int i=0; i<NimBLEDevice::getNumBonds(); ++i)
     if (hostId(NimBLEDevice::getBondedAddress(i)) == selectedId()) selectedBonded = true;
@@ -628,7 +629,7 @@ void setup() {
   hid->setManufacturer("UnlikeOtherAI"); hid->setHidInfo(0, 1);
   hid->setReportMap(reportMap, sizeof(reportMap)); hid->setBatteryLevel(100);
   auto service = server->createService(SERVICE);
-  auto config = service->createCharacteristic(CONFIG, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_AUTHEN, 512);
+  auto config = service->createCharacteristic(CONFIG, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC, 512);
   config->setCallbacks(&provisionCallbacks);
   statusCharacteristic = service->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   statusCharacteristic->setValue("{\"state\":\"ready\"}");
