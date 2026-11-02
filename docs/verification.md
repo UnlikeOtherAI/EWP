@@ -766,3 +766,36 @@ the silent return is not a rejection, `authentication_state: 1`,
 board recovers by itself instead of waiting for a reconnection that nobody is
 there to trigger, which on a wall is the difference between a device that comes
 back and one that looks dead.
+
+### A fresh host bonds, with no code and nobody watching, 2 November 2026
+
+A second ESP32 now plays the part of a phone. `firmware/test-central` is a BLE
+central that finds the keyboard, connects, lets it drive security, and reports
+what happened as JSON over USB. `firmware/test-central/rig.py` drives both
+boards and needs no person at all.
+
+    1. clearing the rig's bonds : bonds cleared
+    2. window on the keyboard  : pairing_open true, 180 s
+    3. rig scan                : scanning
+    4. rig found after 3 s     : found EWP Bench 1
+    5. rig connects            : bonded, encrypted true, bonded_peers 1
+    7. keyboard after          : saved_hosts 1 to 2
+    8. hosts                   : dictator Mac, and test rig 0c:b8:15:c3:6e:1a/0
+
+So the keyboard's pairing path works for a host it has never seen: no passkey,
+no dialog, no tap. That had never been shown before — the Mac's bond predated
+most of the day's changes, and every iPhone attempt had failed.
+
+It took three disconnects to get there, all found from one observation that a
+pairing dialog appeared on the iPhone and vanished in under a second. Half a
+second is far too fast for the supervision timeouts that had been the visible
+symptom, which is what pointed at the board dropping the link on purpose.
+
+What this does not prove: nothing has been typed into a phone or tablet, and no
+iOS device has completed a bond. An ESP32 central is not an iOS host; it cannot
+reproduce iOS's own pairing behaviour, and it is not a HID target. It proves
+the board is not the one refusing.
+
+The board the rig runs on had unrelated ESP-IDF firmware on it, in softAP mode,
+MAC `0c:b8:15:c3:6e:18`. Its whole 4 MB flash was read off before anything was
+written, 4194304 bytes, SHA-256 beginning `52624ed6`, so it can be put back.
